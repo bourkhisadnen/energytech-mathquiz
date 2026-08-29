@@ -312,6 +312,10 @@ Instructor Mode; **Refresh** re-reads it if someone else has been editing.
 Each intake and group shows its counts, and how many trainees still have **no login** — the
 number you chase at the start of a term.
 
+- Trainees have **one Name field**, not a family/given split — Saudi names run
+  given-father-grandfather-family and do not divide cleanly in two. Sheets created before
+  this change are migrated automatically the first time the new backend runs: the two
+  columns are joined, given name first, and the spare column is removed.
 - **+ New** in a pane adds an intake, a group, or a trainee. Adding an intake selects it and
   moves you to the Groups pane; adding a group opens its (empty) trainee list. The
   add-a-trainee form stays open and clears itself, so a run of them can be typed one after
@@ -336,13 +340,13 @@ can no longer sign in.
 
 ### CSV import — one file for the whole intake
 
-Select the intake, press **Import CSV**, and give it one file for everyone. Four columns:
+Select the intake, press **Import CSV**, and give it one file for everyone. Three columns:
 
 ```
-EnergyTech ID, Family name, Given name, Group
-ET1002,Al-Qahtani,Fahad Abdulrahman Nasser Al Qahtani,G1
-ET1003,Al-Ghamdi,"Turki Saad, junior",G2
-ET1004,Al-Harbi,Omar Khalid,G3
+EnergyTech ID, Full name, Group
+ET1002,Fahad Abdulrahman Nasser Al Qahtani,G1
+ET1003,"Turki Saad Al-Ghamdi, junior",G2
+ET1004,Omar Khalid Al-Harbi,G3
 ```
 
 - **Any group named in the file that does not exist yet is created**, so a new intake can be
@@ -351,8 +355,9 @@ ET1004,Al-Harbi,Omar Khalid,G3
 - Commas, semicolons and tabs all work as separators.
 - The Group column is optional. Leave it off and open a group first, and everyone goes into
   that group — the old per-group behaviour.
-- Given names are read to the end of the line, so the long multi-part names that include the
-  father's and grandfather's names come through whole. A name containing a comma just needs
+- **Everything between the ID and the group is the name**, so a name split across cells by a
+  stray comma still comes through whole — as do the long multi-part names that include the
+  father's and grandfather's names. A name that really does contain a comma just needs
   quotes around it.
 - Nothing is written until you confirm. The preview shows the count per group, which groups
   will be created, which IDs are already on record anywhere in the system, which are

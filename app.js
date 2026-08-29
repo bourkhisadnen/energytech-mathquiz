@@ -2307,7 +2307,7 @@ const TRAINEE_TOKEN_KEY = 'energytechTraineeToken_v1';
 const TRAINEE_PROFILE_KEY = 'energytechTraineeProfile_v1';
 
 let traineeToken = null;
-let traineeProfile = null;     // { energytechId, familyName, givenName, intake, group }
+let traineeProfile = null;     // { energytechId, name, intake, group }
 let walkInIdentity = null;     // { name, group, energytechId } for a guest sitting
 let rosterCache = null;        // { intakes: [], groups: [] }
 let pendingImport = null;      // rows waiting for the instructor to confirm
@@ -2362,7 +2362,7 @@ function persistTrainee() {
 function traineeLoggedIn() { return Boolean(traineeToken && traineeProfile); }
 
 function traineeFullName(p) {
-  return `${(p && p.givenName) || ''} ${(p && p.familyName) || ''}`.trim();
+  return String((p && p.name) || '').trim();
 }
 
 /* ---------------- trainee mode screens ---------------- */
@@ -2391,8 +2391,7 @@ function renderTraineeHome() {
     $('traineeProfile').innerHTML = `
       <dl class="profile-grid">
         <div><dt>EnergyTech ID</dt><dd>${escapeHtml(p.energytechId || '')}</dd></div>
-        <div><dt>Family name</dt><dd>${escapeHtml(p.familyName || '')}</dd></div>
-        <div><dt>Given name</dt><dd>${escapeHtml(p.givenName || '')}</dd></div>
+        <div><dt>Name</dt><dd>${escapeHtml(p.name || '')}</dd></div>
         <div><dt>Intake</dt><dd>${escapeHtml(p.intake || '—')}</dd></div>
         <div><dt>Group</dt><dd>${escapeHtml(p.group || '—')}</dd></div>
       </dl>`;
@@ -2688,8 +2687,7 @@ function traineeRow(t, opts) {
     return `<tr class="trainee-edit-row"><td colspan="5">
       <div class="grid trainee-fields">
         <label>EnergyTech ID <input class="edit-id" value="${id}" /></label>
-        <label>Family name <input class="edit-family" value="${escapeHtml(t.familyName)}" /></label>
-        <label>Given name <input class="edit-given" value="${escapeHtml(t.givenName)}" /></label>
+        <label class="name-field">Full name <input class="edit-name" value="${escapeHtml(t.name || '')}" /></label>
         <label>Group <select class="edit-group">${groups.map(g =>
           `<option value="${escapeHtml(g.name)}"${g.name === t.group ? ' selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}</select></label>
       </div>
@@ -2706,8 +2704,7 @@ function traineeRow(t, opts) {
   return `<tr>
     ${box}
     <td class="mono">${id}</td>
-    <td>${escapeHtml(t.familyName)}</td>
-    <td class="given-name">${escapeHtml(t.givenName)}</td>
+    <td class="trainee-name">${escapeHtml(t.name || '')}</td>
     ${where}
     <td>${accountBadge(t.accountStatus || 'none')}</td>
     <td class="row-actions">
@@ -2731,12 +2728,12 @@ function renderTraineePane() {
     if ($('bulkBar')) $('bulkBar').hidden = true;
     const term = searchTerm.toLowerCase();
     const hits = (allTrainees || []).filter(t =>
-      `${t.energytechId} ${t.familyName} ${t.givenName}`.toLowerCase().includes(term));
+      `${t.energytechId} ${t.name || ''}`.toLowerCase().includes(term));
     box.innerHTML = !allTrainees
       ? '<p class="pane-empty">Searching&hellip;</p>'
       : hits.length
         ? `<div class="table-wrap"><table class="dashboard-table">
-            <thead><tr><th>EnergyTech ID</th><th>Family name</th><th>Given name</th><th>Where</th><th>Account</th><th></th></tr></thead>
+            <thead><tr><th>EnergyTech ID</th><th>Name</th><th>Where</th><th>Account</th><th></th></tr></thead>
             <tbody>${hits.slice(0, 100).map(t => traineeRow(t, { showWhere: true })).join('')}</tbody></table></div>
            ${hits.length > 100 ? `<p class="hint">Showing the first 100 of ${hits.length}.</p>` : `<p class="hint">${hits.length} match${hits.length === 1 ? '' : 'es'}.</p>`}`
         : `<p class="pane-empty">Nobody matches “${escapeHtml(searchTerm)}”.</p>`;
@@ -2787,7 +2784,7 @@ function renderTraineePane() {
   box.innerHTML = `<div class="table-wrap"><table class="dashboard-table roster-table">
       <thead><tr>
         <th class="pick"><input type="checkbox" id="pickAll"${allPicked ? ' checked' : ''} aria-label="Select all shown" /></th>
-        <th>EnergyTech ID</th><th>Family name</th><th>Given name</th><th>Account</th><th></th>
+        <th>EnergyTech ID</th><th>Name</th><th>Account</th><th></th>
       </tr></thead>
       <tbody>${list.map(t => traineeRow(t)).join('')}</tbody></table></div>`;
   renderBulkBar();
@@ -2936,7 +2933,7 @@ function parseCsv(text) {
   return rows.filter(r => r.some(c => String(c).trim() !== ''));
 }
 
-const HEADER_WORDS = /^(energytech\s*id|id|spsp\s*id|family|family\s*name|surname|last\s*name|given|given\s*name|first\s*name|name|group|class|section)$/i;
+const HEADER_WORDS = /^(energytech\s*id|id|spsp\s*id|full\s*name|name|trainee|trainee\s*name|family|family\s*name|surname|last\s*name|given|given\s*name|first\s*name|group|class|section)$/i;
 const GROUP_RE = /^G([1-9]|1[0-9]|20)$/;
 
 /* Columns are ID, family, given, and optionally group. The group may also be
@@ -2951,15 +2948,19 @@ function readTraineeCsv(text) {
   for (let i = hadHeader ? 1 : 0; i < rows.length; i++) {
     const cells = rows[i].map(c => String(c).trim());
     let group = '';
-    if (cells.length > 3 && GROUP_RE.test(cells[cells.length - 1].toUpperCase())) {
+    // With one name column a normal row is ID, Name, Group -- three cells. A
+    // name broken across cells by a stray comma makes it longer, never shorter,
+    // so anything from three cells up may end in a group name.
+    if (cells.length >= 3 && GROUP_RE.test(cells[cells.length - 1].toUpperCase())) {
       group = cells.pop().toUpperCase();
     }
     const id = cells[0] || '';
-    const family = cells[1] || '';
-    const given = cells.slice(2).join(', ').trim();
+    // Everything after the ID is the name, so a name split across several cells
+    // by a stray comma still comes through whole.
+    const name = cells.slice(1).join(' ').replace(/\s+/g, ' ').trim();
     if (!id) { bad.push({ line: i + 1, reason: 'no EnergyTech ID' }); continue; }
-    if (!family && !given) { bad.push({ line: i + 1, reason: 'no name' }); continue; }
-    out.push({ energytechId: id.toUpperCase(), familyName: family, givenName: given, group });
+    if (!name) { bad.push({ line: i + 1, reason: 'no name' }); continue; }
+    out.push({ energytechId: id.toUpperCase(), name, group });
   }
   return { rows: out, bad, hadHeader };
 }
@@ -3012,8 +3013,8 @@ async function previewCsv(file) {
       ${hadHeader ? '<li>A header row was detected and ignored.</li>' : ''}
     </ul>
     ${pendingImport.length ? `<div class="table-wrap"><table class="dashboard-table">
-      <thead><tr><th>EnergyTech ID</th><th>Family name</th><th>Given name</th><th>Group</th></tr></thead>
-      <tbody>${pendingImport.slice(0, 8).map(r => `<tr><td class="mono">${escapeHtml(r.energytechId)}</td><td>${escapeHtml(r.familyName)}</td><td class="given-name">${escapeHtml(r.givenName)}</td><td>${escapeHtml(r.group)}</td></tr>`).join('')}</tbody></table></div>
+      <thead><tr><th>EnergyTech ID</th><th>Name</th><th>Group</th></tr></thead>
+      <tbody>${pendingImport.slice(0, 8).map(r => `<tr><td class="mono">${escapeHtml(r.energytechId)}</td><td class="trainee-name">${escapeHtml(r.name)}</td><td>${escapeHtml(r.group)}</td></tr>`).join('')}</tbody></table></div>
       ${pendingImport.length > 8 ? `<p class="hint">…and ${pendingImport.length - 8} more.</p>` : ''}` : ''}
     <div class="button-row">
       <button type="button" id="confirmImportBtn"${pendingImport.length ? '' : ' disabled'}>Import ${pendingImport.length} trainee${pendingImport.length === 1 ? '' : 's'}</button>
@@ -3064,8 +3065,8 @@ async function confirmImport() {
 
 function downloadGroupCsv() {
   if (!traineeCache.length) { rosterStatus('Nothing to download — open a group first.', 'warn'); return; }
-  const head = ['EnergyTech ID', 'Family name', 'Given name', 'Group', 'Account'];
-  const rows = traineeCache.map(t => [t.energytechId, t.familyName, t.givenName, t.group, t.accountStatus || 'none']);
+  const head = ['EnergyTech ID', 'Name', 'Group', 'Account'];
+  const rows = traineeCache.map(t => [t.energytechId, t.name || '', t.group, t.accountStatus || 'none']);
   downloadCsv(csvRows([head].concat(rows)),
     `trainees_${rosterSel.intake}_${rosterSel.group}_${stamp()}.csv`.replace(/\s+/g, ''));
 }
@@ -3254,17 +3255,15 @@ function wireRosterUi() {
     const { intake, group } = rosterSel;
     if (!group) { rosterStatus('Open a group first.', 'warn'); return; }
     const id = $('newTraineeId').value.trim();
-    const family = $('newTraineeFamily').value.trim();
-    const given = $('newTraineeGiven').value.trim();
+    const name = $('newTraineeName').value.trim();
     if (!id) { rosterStatus('An EnergyTech ID is required.', 'warn'); return; }
-    if (!family && !given) { rosterStatus('Enter at least one part of the name.', 'warn'); return; }
-    if (await traineeAction('trainee_save', { energytechId: id, familyName: family, givenName: given, intake, group },
+    if (!name) { rosterStatus('Enter the trainee\'s name.', 'warn'); return; }
+    if (await traineeAction('trainee_save', { energytechId: id, name, intake, group },
         `${id.toUpperCase()} added to ${intake} / ${group}.`, () => {
-          traineeCache.push({ energytechId: id.toUpperCase(), familyName: family, givenName: given,
-                              intake, group, accountStatus: 'none' });
+          traineeCache.push({ energytechId: id.toUpperCase(), name, intake, group, accountStatus: 'none' });
           bumpGroup(intake, group, 1, 0);
         })) {
-      ['newTraineeId', 'newTraineeFamily', 'newTraineeGiven'].forEach(k => { if ($(k)) $(k).value = ''; });
+      ['newTraineeId', 'newTraineeName'].forEach(k => { if ($(k)) $(k).value = ''; });
       $('newTraineeId').focus();               // stay put, ready for the next one
     }
   });
@@ -3410,14 +3409,13 @@ function wireRosterUi() {
         const previousId = tSave.dataset.id;
         const next = {
           energytechId: row.querySelector('.edit-id').value.trim().toUpperCase(),
-          familyName: row.querySelector('.edit-family').value.trim(),
-          givenName: row.querySelector('.edit-given').value.trim(),
+          name: row.querySelector('.edit-name').value.trim(),
           group: row.querySelector('.edit-group').value
         };
         const before = traineeCache.find(x => x.energytechId === previousId);
         const ok = await traineeAction('trainee_save', {
           energytechId: next.energytechId, previousId,
-          familyName: next.familyName, givenName: next.givenName,
+          name: next.name,
           intake: rosterSel.intake, group: next.group
         }, 'Saved.', () => {
           editingId = '';

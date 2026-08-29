@@ -605,9 +605,14 @@ a.list-pill {
   border-top: 2px solid var(--border);
 }
 .roster-trainees h3 { margin: 0 0 10px; color: var(--blue); }
-/* Saudi given names carry the father's and grandfather's names, so this
+/* Saudi full names carry the father's and grandfather's names, so the name
    column is the one that needs the room. */
-.given-name { min-width: 220px; }
+.trainee-name, .given-name { min-width: 190px; }
+/* Row actions must stay reachable without scrolling the table sideways. */
+.roster-table .row-actions { white-space: nowrap; }
+.roster-table th:last-child, .roster-table td:last-child { width: 1%; }
+.name-field { grid-column: span 2; }
+@media (max-width: 620px) { .name-field { grid-column: auto; } }
 
 .csv-preview {
   border: 1px solid var(--accent);

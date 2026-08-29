@@ -475,11 +475,41 @@ const GROUP_NAME_RE = /^G([1-9]|1[0-9]|20)$/;
 
 const INTAKE_HEADERS  = ['Timestamp', 'Label', 'Status', 'Created By'];
 const GROUP_HEADERS   = ['Timestamp', 'Intake', 'Group', 'Created By'];
-const TRAINEE_HEADERS = ['Timestamp', 'EnergyTech ID', 'Family Name', 'Given Name',
+/* One Name column rather than Family + Given: Saudi names run
+ * given-father-grandfather-family and do not split cleanly in two. */
+const TRAINEE_HEADERS = ['Timestamp', 'EnergyTech ID', 'Name',
                          'Intake', 'Group', 'Account Status', 'Password Hash', 'Salt',
                          'Token', 'Token Expires', 'Created By'];
 
 var ENSURED_ = {};        // reset on every execution, so it cannot go stale
+
+/* Existing sheets carry Family Name and Given Name. Join them into one Name --
+ * given first, so "Mohammed Abdullah Saleh" + "Al-Otaibi" reads as the full name
+ * in the usual order -- then drop the spare column. Runs once: after it, there
+ * is no 'Given Name' header to find. */
+function migrateTraineeNames_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_TRAINEES);
+  if (!sheet || sheet.getLastRow() < 1) return;
+
+  const width = Math.max(sheet.getLastColumn(), 1);
+  const header = sheet.getRange(1, 1, 1, width).getValues()[0].map(h => String(h || ''));
+  const gi = header.indexOf('Given Name');
+  const fi = header.indexOf('Family Name');
+  if (gi === -1 || fi === -1) return;                   // nothing to migrate
+
+  const rows = sheet.getLastRow() - 1;
+  if (rows > 0) {
+    const fam = sheet.getRange(2, fi + 1, rows, 1).getValues();
+    const giv = sheet.getRange(2, gi + 1, rows, 1).getValues();
+    const merged = fam.map((r, i) =>
+      [(String(giv[i][0] || '').trim() + ' ' + String(r[0] || '').trim()).trim()]);
+    sheet.getRange(2, fi + 1, rows, 1).setNumberFormat('@');
+    sheet.getRange(2, fi + 1, rows, 1).setValues(merged);
+  }
+  sheet.deleteColumn(gi + 1);
+  sheet.getRange(1, fi + 1).setValue('Name');
+}
 
 function rosterSheet_(name, headers) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -535,9 +565,9 @@ function rosterList_(params) {
   const counts = {};
   const accounts = {};
   rowsOf_(traineesSheet_()).forEach(r => {
-    const k = String(r[4] || '') + '|' + String(r[5] || '');
+    const k = String(r[3] || '') + '|' + String(r[4] || '');
     counts[k] = (counts[k] || 0) + 1;
-    if (String(r[6] || '') === 'active') accounts[k] = (accounts[k] || 0) + 1;
+    if (String(r[5] || '') === 'active') accounts[k] = (accounts[k] || 0) + 1;
   });
 
   return {
@@ -558,12 +588,12 @@ function traineeList_(params) {
   const group = normLabel_(params.group);
   const out = [];
   rowsOf_(traineesSheet_()).forEach(r => {
-    if (intake && normLabel_(r[4]) !== intake) return;
-    if (group && normLabel_(r[5]) !== group) return;
+    if (intake && normLabel_(r[3]) !== intake) return;
+    if (group && normLabel_(r[4]) !== group) return;
     out.push({
-      energytechId: String(r[1] || ''), familyName: String(r[2] || ''),
-      givenName: String(r[3] || ''), intake: String(r[4] || ''), group: String(r[5] || ''),
-      accountStatus: String(r[6] || 'none')
+      energytechId: String(r[1] || ''), name: String(r[2] || ''),
+      intake: String(r[3] || ''), group: String(r[4] || ''),
+      accountStatus: String(r[5] || 'none')
     });
   });
   return { ok: true, trainees: out };
@@ -592,7 +622,7 @@ function intakeSave_(params) {
     const g = groupsSheet_();
     rowsOf_(g).forEach((r, i) => { if (normLabel_(r[1]) === previous) setTextCell_(g, i + 2, 2, label); });
     const t = traineesSheet_();
-    rowsOf_(t).forEach((r, i) => { if (normLabel_(r[4]) === previous) setTextCell_(t, i + 2, 5, label); });
+    rowsOf_(t).forEach((r, i) => { if (normLabel_(r[3]) === previous) setTextCell_(t, i + 2, 4, label); });
     return { ok: true, label: label, renamedFrom: previous };
   }
 
@@ -605,7 +635,7 @@ function intakeDelete_(params) {
   if (!auth.ok) return auth;
   const label = normLabel_(params.label);
   const groups = rowsOf_(groupsSheet_()).filter(r => normLabel_(r[1]) === label);
-  const trainees = rowsOf_(traineesSheet_()).filter(r => normLabel_(r[4]) === label);
+  const trainees = rowsOf_(traineesSheet_()).filter(r => normLabel_(r[3]) === label);
   if (groups.length || trainees.length) {
     return { ok: false, error: 'Intake ' + label + ' still has ' + groups.length + ' group(s) and '
       + trainees.length + ' trainee(s). Delete or move them first.' };
@@ -645,7 +675,7 @@ function groupSave_(params) {
     setTextCell_(sheet, found, 3, name);
     const t = traineesSheet_();
     rowsOf_(t).forEach((r, i) => {
-      if (normLabel_(r[4]) === intake && normLabel_(r[5]) === previous) setTextCell_(t, i + 2, 6, name);
+      if (normLabel_(r[3]) === intake && normLabel_(r[4]) === previous) setTextCell_(t, i + 2, 5, name);
     });
     return { ok: true, intake: intake, name: name, renamedFrom: previous };
   }
@@ -659,7 +689,7 @@ function groupDelete_(params) {
   const intake = normLabel_(params.intake);
   const name = normLabel_(params.name);
   const trainees = rowsOf_(traineesSheet_())
-    .filter(r => normLabel_(r[4]) === intake && normLabel_(r[5]) === name);
+    .filter(r => normLabel_(r[3]) === intake && normLabel_(r[4]) === name);
   if (trainees.length) {
     return { ok: false, error: name + ' in ' + intake + ' still has ' + trainees.length
       + ' trainee(s). Remove them first.' };
@@ -687,13 +717,12 @@ function traineeSave_(params) {
   if (!auth.ok) return auth;
   const id = normId_(params.energytechId);
   const previousId = normId_(params.previousId);
-  const family = String(params.familyName || '').trim();
-  const given = String(params.givenName || '').trim();
+  const name = String(params.name || '').trim();
   const intake = normLabel_(params.intake);
   const group = normLabel_(params.group);
 
   if (!id) return { ok: false, error: 'EnergyTech ID is required.' };
-  if (!family && !given) return { ok: false, error: 'Enter at least one name.' };
+  if (!name) return { ok: false, error: 'Enter the trainee\'s name.' };
   if (!rowsOf_(groupsSheet_()).some(r => normLabel_(r[1]) === intake && normLabel_(r[2]) === group)) {
     return { ok: false, error: 'Group ' + group + ' does not exist in intake ' + intake + '.' };
   }
@@ -702,16 +731,16 @@ function traineeSave_(params) {
   const existing = findTraineeRow_(sheet, id);
   if (existing && normId_(existing.row[1]) !== previousId) {
     return { ok: false, error: 'A trainee with ID ' + id + ' already exists in '
-      + String(existing.row[4] || '') + ' / ' + String(existing.row[5] || '') + '.' };
+      + String(existing.row[3] || '') + ' / ' + String(existing.row[4] || '') + '.' };
   }
   if (previousId) {
     const target = findTraineeRow_(sheet, previousId);
     if (!target) return { ok: false, error: 'Trainee not found.' };
-    setTextBlock_(sheet, target.rowNumber, 2, [id, family, given, intake, group]);
+    setTextBlock_(sheet, target.rowNumber, 2, [id, name, intake, group]);
     return { ok: true, energytechId: id, updated: true };
   }
-  appendTextRow_(sheet, [new Date(), id, family, given, intake, group, 'none', '', '', '', '',
-                         auth.instructor.username], [2, 3, 4, 5, 6]);
+  appendTextRow_(sheet, [new Date(), id, name, intake, group, 'none', '', '', '', '',
+                         auth.instructor.username], [2, 3, 4, 5]);
   return { ok: true, energytechId: id };
 }
 
@@ -746,9 +775,9 @@ function traineeSetAccount_(params) {
   const sheet = traineesSheet_();
   const target = findTraineeRow_(sheet, id);
   if (!target) return { ok: false, error: 'Trainee ' + id + ' not found.' };
-  sheet.getRange(target.rowNumber, 7).setValue(status);
-  if (status !== 'active') sheet.getRange(target.rowNumber, 10, 1, 2).setValues([['', '']]);
-  if (status === 'none') sheet.getRange(target.rowNumber, 8, 1, 2).setValues([['', '']]);
+  sheet.getRange(target.rowNumber, 6).setValue(status);
+  if (status !== 'active') sheet.getRange(target.rowNumber, 9, 1, 2).setValues([['', '']]);
+  if (status === 'none') sheet.getRange(target.rowNumber, 7, 1, 2).setValues([['', '']]);
   return { ok: true, energytechId: id, status: status };
 }
 
@@ -812,10 +841,10 @@ function traineeImport_(payload) {
     if (!id || seen[id]) { skipped++; return; }
     if (!g) { ungrouped++; return; }
     seen[id] = true;
-    toAdd.push([now, id, String(t.familyName || '').trim(), String(t.givenName || '').trim(),
+    toAdd.push([now, id, String(t.name || '').trim(),
                 intake, g, 'none', '', '', '', '', auth.instructor.username]);
   });
-  if (toAdd.length) writeRows_(sheet, sheet.getLastRow() + 1, toAdd, [2, 3, 4, 5, 6]);
+  if (toAdd.length) writeRows_(sheet, sheet.getLastRow() + 1, toAdd, [2, 3, 4, 5]);
 
   return { ok: true, added: toAdd.length, skipped: skipped, ungrouped: ungrouped, groupsCreated: created };
 }
@@ -839,7 +868,7 @@ function traineeMove_(params) {
   ids.forEach(id => {
     const found = findTraineeRow_(sheet, id);
     if (!found) { missing.push(id); return; }
-    setTextBlock_(sheet, found.rowNumber, 5, [intake, group]);
+    setTextBlock_(sheet, found.rowNumber, 4, [intake, group]);
     moved++;
   });
   return { ok: true, moved: moved, missing: missing, intake: intake, group: group };
@@ -857,11 +886,10 @@ function traineeMove_(params) {
 function traineePublic_(row) {
   return {
     energytechId: String(row[1] || ''),
-    familyName: String(row[2] || ''),
-    givenName: String(row[3] || ''),
-    intake: String(row[4] || ''),
-    group: String(row[5] || ''),
-    accountStatus: String(row[6] || 'none')
+    name: String(row[2] || ''),
+    intake: String(row[3] || ''),
+    group: String(row[4] || ''),
+    accountStatus: String(row[5] || 'none')
   };
 }
 
@@ -876,7 +904,7 @@ function traineeSignup_(params) {
   if (!found) {
     return { ok: false, error: 'That EnergyTech ID is not on any intake list. Ask your instructor to add you.' };
   }
-  const status = String(found.row[6] || 'none');
+  const status = String(found.row[5] || 'none');
   if (status === 'active') {
     return { ok: false, error: 'An account already exists for this ID. Use Log in, or ask an admin to reset it.' };
   }
@@ -887,9 +915,9 @@ function traineeSignup_(params) {
   const salt = makeSalt_();
   const token = makeToken_();
   const expires = new Date(Date.now() + TOKEN_TTL_MS);
-  sheet.getRange(found.rowNumber, 7, 1, 5)
+  sheet.getRange(found.rowNumber, 6, 1, 5)
        .setValues([['active', hashPassword_(password, salt), salt, token, expires]]);
-  found.row[6] = 'active';                       // report the row as it now is
+  found.row[5] = 'active';                       // report the row as it now is
   return { ok: true, token: token, trainee: traineePublic_(found.row) };
 }
 
@@ -902,16 +930,16 @@ function traineeLogin_(params) {
   const found = findTraineeRow_(sheet, id);
   if (!found) return { ok: false, error: 'No trainee with that EnergyTech ID.' };
 
-  const status = String(found.row[6] || 'none');
+  const status = String(found.row[5] || 'none');
   if (status === 'none') return { ok: false, error: 'No account yet for this ID. Use "Create my account" first.' };
   if (status !== 'active') return { ok: false, error: 'Access for this ID has been turned off. Contact your instructor.' };
 
-  if (hashPassword_(password, String(found.row[8] || '')) !== String(found.row[7] || '')) {
+  if (hashPassword_(password, String(found.row[7] || '')) !== String(found.row[6] || '')) {
     return { ok: false, error: 'Incorrect password.' };
   }
   const token = makeToken_();
   const expires = new Date(Date.now() + TOKEN_TTL_MS);
-  sheet.getRange(found.rowNumber, 10, 1, 2).setValues([[token, expires]]);
+  sheet.getRange(found.rowNumber, 9, 1, 2).setValues([[token, expires]]);
   return { ok: true, token: token, trainee: traineePublic_(found.row) };
 }
 
@@ -923,11 +951,11 @@ function requireTrainee_(params) {
   const sheet = traineesSheet_();
   const rows = rowsOf_(sheet);
   for (let i = 0; i < rows.length; i++) {
-    if (String(rows[i][9] || '') !== token) continue;
-    if (String(rows[i][6] || '') !== 'active') {
+    if (String(rows[i][8] || '') !== token) continue;
+    if (String(rows[i][5] || '') !== 'active') {
       return { ok: false, error: 'Access for this ID has been turned off. Contact your instructor.' };
     }
-    const expires = rows[i][10] ? new Date(rows[i][10]) : null;
+    const expires = rows[i][9] ? new Date(rows[i][9]) : null;
     if (!expires || isNaN(expires.getTime()) || expires.getTime() < Date.now()) {
       return { ok: false, error: 'Session expired. Please log in again.' };
     }
@@ -944,7 +972,7 @@ function traineeMe_(params) {
 
 function traineeLogout_(params) {
   const auth = requireTrainee_(params);
-  if (auth.ok) traineesSheet_().getRange(auth.rowNumber, 10, 1, 2).setValues([['', '']]);
+  if (auth.ok) traineesSheet_().getRange(auth.rowNumber, 9, 1, 2).setValues([['', '']]);
   return { ok: true };
 }
 
@@ -955,11 +983,11 @@ function traineeChangePassword_(params) {
   if (newPassword.length < 6) return { ok: false, error: 'New password must be at least 6 characters.' };
   const sheet = traineesSheet_();
   const row = rowsOf_(sheet)[auth.rowNumber - 2];
-  if (hashPassword_(String(params.oldPassword || ''), String(row[8] || '')) !== String(row[7] || '')) {
+  if (hashPassword_(String(params.oldPassword || ''), String(row[7] || '')) !== String(row[6] || '')) {
     return { ok: false, error: 'Current password is incorrect.' };
   }
   const salt = makeSalt_();
-  sheet.getRange(auth.rowNumber, 8, 1, 2).setValues([[hashPassword_(newPassword, salt), salt]]);
+  sheet.getRange(auth.rowNumber, 7, 1, 2).setValues([[hashPassword_(newPassword, salt), salt]]);
   return { ok: true, message: 'Password changed.' };
 }
 
@@ -1070,7 +1098,7 @@ function saveAttempt_(p) {
     const t = requireTrainee_({ token: p.traineeToken });
     if (t.ok) {
       identity = {
-        name: (t.trainee.givenName + ' ' + t.trainee.familyName).trim(),
+        name: t.trainee.name,
         group: t.trainee.group,
         energytechId: t.trainee.energytechId,
         intake: t.trainee.intake,
@@ -1260,6 +1288,7 @@ function ensureSheets_() {
   if (sessionsSheet) ensureHeaders_(sessionsSheet, ['Intake', 'Allow Walk-In']);
   intakesSheet_();
   groupsSheet_();
+  migrateTraineeNames_();          // must precede traineesSheet_'s header check
   traineesSheet_();
 }
 
