@@ -653,3 +653,9 @@ a.list-pill {
   .roster-row { align-items: flex-start; }
   .roster-name { flex: 1 1 100%; }
 }
+
+/* Backend diagnostic report */
+.diag-list { list-style: none; margin: 0 0 .8rem; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+.diag-list li { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.diag-list .status-badge { flex: none; min-width: 1.6rem; text-align: center; }
+.diag-list .hint { margin: 0; font-size: .88rem; }

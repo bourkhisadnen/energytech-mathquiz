@@ -517,6 +517,16 @@ function setDashboardStatus(message, type = 'empty') {
   el.innerHTML = message;
 }
 
+/* One place decides which backend URL a call uses. Login read the saved value
+ * while the roster calls read the on-screen "Instructor connection setup" box,
+ * so anything left in that box made login succeed against one deployment while
+ * every roster call went to another -- which looks exactly like the backend
+ * ignoring only the new features. */
+function activeWebAppUrl() {
+  const typed = $('webAppUrl') ? $('webAppUrl').value : '';
+  return normalizeUrl(typed || savedWebAppUrl());
+}
+
 function savedWebAppUrl() {
   return localStorage.getItem(WEB_APP_URL_STORAGE_KEY) || DEFAULT_WEB_APP_URL;
 }
@@ -1358,7 +1368,7 @@ async function loadDashboard() {
     setDashboardStatus('You are not logged in. Please log in again.', 'bad');
     return;
   }
-  const url = normalizeUrl(($('webAppUrl') && $('webAppUrl').value) || savedWebAppUrl());
+  const url = activeWebAppUrl();
   if (!url) {
     setDashboardStatus('No Google Apps Script URL found.', 'warn');
     return;
@@ -1665,7 +1675,7 @@ async function attemptInstructorLogin() {
     if (statusEl) { statusEl.className = 'feedback warn'; statusEl.innerHTML = 'Enter your username and password.'; }
     return;
   }
-  const url = normalizeUrl(savedWebAppUrl());
+  const url = activeWebAppUrl();
   if (!url) {
     if (statusEl) { statusEl.className = 'feedback bad'; statusEl.innerHTML = 'No Google Apps Script URL is configured.'; }
     return;
@@ -1709,7 +1719,7 @@ function clearDashboardData() {
 
 function logoutInstructor() {
   const token = authToken;
-  const url = normalizeUrl(savedWebAppUrl());
+  const url = activeWebAppUrl();
   authToken = null;
   authUser = null;
   persistAuth();
@@ -1743,7 +1753,7 @@ async function requestInstructorAccount() {
     if (statusEl) { statusEl.className = 'feedback warn'; statusEl.innerHTML = 'Passwords do not match.'; }
     return;
   }
-  const url = normalizeUrl(savedWebAppUrl());
+  const url = activeWebAppUrl();
   if (!url) {
     if (statusEl) { statusEl.className = 'feedback bad'; statusEl.innerHTML = 'No Google Apps Script URL is configured.'; }
     return;
@@ -1783,7 +1793,7 @@ async function changeMyPassword() {
     setOnlineStatus('New password must be at least 6 characters.', 'warn');
     return;
   }
-  const url = normalizeUrl(savedWebAppUrl());
+  const url = activeWebAppUrl();
   try {
     const data = await getJsonp(url, { action: 'auth_change_password', token: authToken, oldPassword, newPassword }, 'energytechChangePw');
     if (!data || !data.ok) {
@@ -1799,7 +1809,7 @@ async function changeMyPassword() {
 
 async function loadInstructorAccounts() {
   if (!isLoggedIn() || !isAdmin()) return;
-  const url = normalizeUrl(savedWebAppUrl());
+  const url = activeWebAppUrl();
   const out = $('instructorAccountsOutput');
   if (out) out.innerHTML = '<p class="hint">Loading accounts...</p>';
   try {
@@ -1844,7 +1854,7 @@ function renderInstructorAccounts(list) {
 }
 
 async function setInstructorStatus(username, status) {
-  const url = normalizeUrl(savedWebAppUrl());
+  const url = activeWebAppUrl();
   try {
     const data = await getJsonp(url, { action: 'admin_set_status', token: authToken, targetUsername: username, status }, 'energytechSetStatus');
     if (!data || !data.ok) { alert((data && data.error) || 'Could not update account.'); return; }
@@ -1853,7 +1863,7 @@ async function setInstructorStatus(username, status) {
 }
 
 async function setInstructorRole(username, role) {
-  const url = normalizeUrl(savedWebAppUrl());
+  const url = activeWebAppUrl();
   try {
     const data = await getJsonp(url, { action: 'admin_set_role', token: authToken, targetUsername: username, role }, 'energytechSetRole');
     if (!data || !data.ok) { alert((data && data.error) || 'Could not update role.'); return; }
@@ -1924,7 +1934,7 @@ async function createSession() {
     return;
   }
   if (!requireSelection()) return;
-  const url = normalizeUrl(($('webAppUrl') && $('webAppUrl').value) || savedWebAppUrl());
+  const url = activeWebAppUrl();
   const payload = sessionPayloadFromInstructor();
   payload.token = authToken;
   currentSession = payload.session;
@@ -1979,7 +1989,7 @@ async function createSession() {
 }
 
 
-function getJsonp(url, params = {}, prefix = 'energytechJsonp') {
+function getJsonp(url, params = {}, prefix = 'energytechJsonp', timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const callbackName = `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     let finished = false;
@@ -1989,8 +1999,11 @@ function getJsonp(url, params = {}, prefix = 'energytechJsonp') {
       delete window[callbackName];
       const old = document.getElementById(callbackName);
       if (old) old.remove();
-      reject(new Error('No response from Google Apps Script. Make sure Code.gs is deployed as a new Web App version.'));
-    }, 15000);
+      reject(new Error('Waited 30 seconds with no reply from Google Apps Script. '
+        + 'The script did not answer at all, which usually means the deployment is not reachable rather than that it is out of date. '
+        + 'Open the Web App URL in a browser tab: it should show text starting <code>{"ok":</code>. '
+        + 'If you get a Google sign-in page instead, set <strong>Deploy \u2192 Manage deployments \u2192 Who has access</strong> to <strong>Anyone</strong>.'));
+    }, timeoutMs);
 
     window[callbackName] = (data) => {
       if (finished) return;
@@ -2019,33 +2032,74 @@ function getJsonp(url, params = {}, prefix = 'energytechJsonp') {
   });
 }
 
+/* Runs a short sequence of probes rather than a single check, because
+ * "it does not work" has several very different causes and they need
+ * different fixes. Each probe is caught on its own so one failure still
+ * leaves the rest of the report readable. */
 async function testBackendConnection() {
-  const url = normalizeUrl(($('webAppUrl') && $('webAppUrl').value) || savedWebAppUrl());
-  setDashboardStatus('Testing backend connection...', 'empty');
-  try {
-    const data = await getJsonp(url, { action: 'ping' }, 'energytechPing');
-    if (!data || !data.ok) {
-      setDashboardStatus(`Backend responded with an error: ${escapeHtml((data && data.error) || 'Unknown error')}`, 'bad');
-      return;
+  const url = activeWebAppUrl();
+  if (!url) { setDashboardStatus('No Google Apps Script URL is saved.', 'bad'); return; }
+  setDashboardStatus('Running backend checks...', 'empty');
+
+  // An untokened call to a protected action is the version probe: the current
+  // backend refuses it with an error, an older one that has never heard of the
+  // action falls through to its generic ok reply.
+  const refuses = d => Boolean(d && d.ok === false && d.error);
+  const probes = [
+    { label: 'Backend is reachable', action: 'ping', token: false,
+      pass: d => Boolean(d && d.ok),
+      fail: 'The script did not answer. Check the Web App URL, and that <strong>Who has access</strong> is <strong>Anyone</strong>.' },
+    { label: 'Instructor accounts supported', action: 'admin_list_instructors', token: false,
+      pass: refuses,
+      fail: 'This deployment predates instructor accounts. Paste the latest <code>Code.gs</code> and deploy a <strong>New version</strong>.' },
+    { label: 'Intake module supported', action: 'roster_list', token: false,
+      pass: refuses,
+      fail: 'This deployment does not have the intake module yet. Paste the latest <code>Code.gs</code> and deploy a <strong>New version</strong>.' },
+    { label: 'Your login is still valid', action: 'roster_list', token: true,
+      pass: d => Boolean(d && d.ok === true),
+      fail: 'The backend is up to date, but it did not accept your login. Log out and log in again.' }
+  ];
+
+  const rows = [];
+  let firstProblem = null;
+  for (const probe of probes) {
+    if (probe.token && !authToken) {
+      rows.push({ label: probe.label, state: 'skip', detail: 'not logged in on this device' });
+      continue;
     }
-    // "Responding" is not enough: an old deployment answers ping happily but has
-    // no account support, which then shows up much later as a failed login.
-    // Probe an auth endpoint with no token -- the current backend must refuse it
-    // with an error, while an old one falls through to its generic ok reply.
-    const probe = await getJsonp(url, { action: 'admin_list_instructors' }, 'energytechProbe');
-    const supportsAccounts = Boolean(probe && probe.ok === false && probe.error);
-    if (supportsAccounts) {
-      setDashboardStatus('Backend is responding and supports instructor accounts.', 'good');
-    } else {
-      setDashboardStatus(
-        'Backend is responding, but it is an <strong>older version without instructor accounts</strong>. '
-        + 'Logging in will fail. Paste the latest <code>Code.gs</code> into Apps Script, then '
-        + '<strong>Deploy → Manage deployments → edit → Version: New version → Deploy</strong>. '
-        + 'If the URL changes, save the new one above.', 'bad');
+    const params = { action: probe.action };
+    if (probe.token) params.token = authToken;
+    let detail = '';
+    let good = false;
+    try {
+      const data = await getJsonp(url, params, 'energytechDiag', 12000);
+      good = probe.pass(data);
+      detail = data && data.error ? String(data.error)
+        : data && data.message ? String(data.message)
+        : 'replied';
+    } catch (err) {
+      detail = 'no reply within 12 seconds';
     }
-  } catch (err) {
-    setDashboardStatus(escapeHtml(err.message || String(err)), 'bad');
+    rows.push({ label: probe.label, state: good ? 'ok' : 'bad', detail });
+    if (!good && !firstProblem) firstProblem = probe;
+    if (!good) break;                 // later probes depend on the earlier ones
   }
+
+  const icon = { ok: '&#10003;', bad: '&#10007;', skip: '&ndash;' };
+  const cls  = { ok: 'status-approved', bad: 'status-rejected', skip: 'status-pending' };
+  const list = rows.map(r =>
+    `<li><span class="status-badge ${cls[r.state]}">${icon[r.state]}</span> ${escapeHtml(r.label)}
+      <span class="hint"> &mdash; ${escapeHtml(r.detail)}</span></li>`).join('');
+
+  const allGood = rows.length === probes.length && rows.every(r => r.state === 'ok');
+  setDashboardStatus(
+    `<ul class="diag-list">${list}</ul>`
+    + (allGood
+        ? '<p><strong>Everything is up to date.</strong></p>'
+        : `<p><strong>What to do:</strong> ${firstProblem ? firstProblem.fail : 'Log in and run this again.'}</p>`
+          + `<p class="hint">To see the raw reply, open this in a new tab:<br>`
+          + `<a href="${escapeHtml(url)}?action=${escapeHtml(firstProblem ? firstProblem.action : 'ping')}" target="_blank" rel="noopener">${escapeHtml(url)}?action=${escapeHtml(firstProblem ? firstProblem.action : 'ping')}</a></p>`),
+    allGood ? 'good' : 'bad');
 }
 
 function getSessionByJsonp(url, code) {
@@ -2059,7 +2113,7 @@ async function fetchSessionByCode(code) {
   if (local) {
     try { return JSON.parse(local); } catch { /* fall through to the network */ }
   }
-  const url = normalizeUrl(savedWebAppUrl());
+  const url = activeWebAppUrl();
   if (!url) return null;
   const data = await getSessionByJsonp(url, code);
   return (data && data.ok && data.session) ? data.session : null;
@@ -2264,7 +2318,7 @@ let pendingImport = null;      // rows waiting for the instructor to confirm
 /* ---------------- shared backend call ---------------- */
 
 async function rosterCall(action, params = {}, prefix = 'energytechRoster') {
-  const url = normalizeUrl(($('webAppUrl') && $('webAppUrl').value) || savedWebAppUrl());
+  const url = activeWebAppUrl();
   if (!url) throw new Error('No Google Apps Script URL is configured.');
   const data = await getJsonp(url, Object.assign({ action }, params), prefix);
   if (!data) throw new Error('No response from the backend.');
@@ -2421,7 +2475,7 @@ function traineeLogOut() {
   currentQuiz = [];
   if ($('studentQuizArea')) $('studentQuizArea').hidden = true;
   if (token) {
-    const url = normalizeUrl(savedWebAppUrl());
+    const url = activeWebAppUrl();
     if (url) getJsonp(url, { action: 'trainee_logout', token }, 'energytechTraineeLogout').catch(() => {});
   }
   renderTraineeHome();
@@ -2724,7 +2778,7 @@ async function previewCsv(file) {
 async function confirmImport() {
   const { intake, group } = rosterContext;
   if (!pendingImport || !pendingImport.length) return;
-  const url = normalizeUrl(($('webAppUrl') && $('webAppUrl').value) || savedWebAppUrl());
+  const url = activeWebAppUrl();
   const before = pendingImport.length;
   rosterStatus(`Importing ${before} trainee(s)…`);
   try {
