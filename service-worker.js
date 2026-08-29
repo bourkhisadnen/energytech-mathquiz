@@ -1,4 +1,4 @@
-const CACHE_NAME = 'energytech-quiz-app-v32-roster-workspace';
+const CACHE_NAME = 'energytech-quiz-app-v33-instant-updates';
 const FILES = [
   './',
   './index.html',

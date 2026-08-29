@@ -1999,10 +1999,8 @@ function getJsonp(url, params = {}, prefix = 'energytechJsonp', timeoutMs = 3000
       delete window[callbackName];
       const old = document.getElementById(callbackName);
       if (old) old.remove();
-      reject(new Error('Waited 30 seconds with no reply from Google Apps Script. '
-        + 'The script did not answer at all, which usually means the deployment is not reachable rather than that it is out of date. '
-        + 'Open the Web App URL in a browser tab: it should show text starting <code>{"ok":</code>. '
-        + 'If you get a Google sign-in page instead, set <strong>Deploy \u2192 Manage deployments \u2192 Who has access</strong> to <strong>Anyone</strong>.'));
+      reject(new Error('Google Apps Script did not answer in time. '
+        + 'Press Refresh to try again, or run Test backend connection if it keeps happening.'));
     }, timeoutMs);
 
     window[callbackName] = (data) => {
@@ -2316,10 +2314,18 @@ let pendingImport = null;      // rows waiting for the instructor to confirm
 
 /* ---------------- shared backend call ---------------- */
 
-async function rosterCall(action, params = {}, prefix = 'energytechRoster') {
+async function rosterCall(action, params = {}, prefix = 'energytechRoster', retries = 0) {
   const url = activeWebAppUrl();
   if (!url) throw new Error('No Google Apps Script URL is configured.');
-  const data = await getJsonp(url, Object.assign({ action }, params), prefix);
+  let data;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      data = await getJsonp(url, Object.assign({ action }, params), prefix);
+      break;
+    } catch (err) {
+      if (attempt >= retries) throw err;
+    }
+  }
   if (!data) throw new Error('No response from the backend.');
   // An Apps Script that predates this module has no such action and falls
   // through to its generic reply, so ok:true arrives with nothing in it.
@@ -2552,7 +2558,7 @@ async function loadRoster(quiet) {
   if (!isLoggedIn()) return;
   if (!quiet) rosterTopStatus('Loading&hellip;');
   try {
-    const data = await rosterCall('roster_list', { token: authToken });
+    const data = await rosterCall('roster_list', { token: authToken }, 'energytechRoster', 1);
     if (!data.ok) {
       if (isAdmin()) rosterTopStatus(escapeHtml(data.error || 'Could not load intakes.'), 'bad');
       return;
@@ -2826,7 +2832,7 @@ async function refreshTrainees() {
   const { intake, group } = rosterSel;
   if (!intake || !group) return;
   try {
-    const data = await rosterCall('trainee_list', { token: authToken, intake, group }, 'energytechTraineeList');
+    const data = await rosterCall('trainee_list', { token: authToken, intake, group }, 'energytechTraineeList', 1);
     if (!data.ok) { rosterStatus(escapeHtml(data.error || 'Could not load trainees.'), 'bad'); return; }
     traineeCache = data.trainees || [];
     rosterStatus('');
@@ -2838,12 +2844,23 @@ async function refreshTrainees() {
 
 /* ---------------- actions ---------------- */
 
-async function rosterAction(action, params, okMessage) {
+/* The backend confirms what it did, so the change is applied to the local copy
+ * and drawn straight away. Waiting for a second round trip to re-read the whole
+ * roster made every add feel like it had not worked -- and if that read timed
+ * out, the list genuinely never updated. The re-read still happens, quietly,
+ * afterwards, to pick up anything another instructor changed. */
+function reconcileSoon() {
+  allTrainees = null;                         // the search index is now stale
+  clearTimeout(reconcileSoon._t);
+  reconcileSoon._t = setTimeout(() => { loadRoster(true).catch(() => {}); }, 400);
+}
+
+async function rosterAction(action, params, okMessage, apply) {
   try {
     const data = await rosterCall(action, Object.assign({ token: authToken }, params));
     if (!data.ok) { rosterTopStatus(escapeHtml(data.error || 'That did not work.'), 'bad'); return false; }
-    await loadRoster(true);
-    allTrainees = null;                       // the search index is now stale
+    if (apply) { apply(data); renderWorkspace(); }
+    reconcileSoon();
     if (okMessage) rosterFlash(escapeHtml(okMessage), 'good');
     return true;
   } catch (err) {
@@ -2852,19 +2869,26 @@ async function rosterAction(action, params, okMessage) {
   }
 }
 
-async function traineeAction(action, params, okMessage) {
+async function traineeAction(action, params, okMessage, apply) {
   try {
     const data = await rosterCall(action, Object.assign({ token: authToken }, params), 'energytechTraineeAdmin');
     if (!data.ok) { rosterStatus(escapeHtml(data.error || 'That did not work.'), 'bad'); return false; }
-    allTrainees = null;
-    await refreshTrainees();
-    await loadRoster(true);
+    if (apply) { apply(data); renderGroupPane(); renderTraineePane(); }
+    reconcileSoon();
     if (okMessage) rosterFlash(escapeHtml(okMessage), 'good');
     return true;
   } catch (err) {
     rosterStatus(escapeHtml(err.message || String(err)), 'bad');
     return false;
   }
+}
+
+/* Keeps a group's counters honest between the local change and the re-read. */
+function bumpGroup(intake, name, dTrainees, dLogins) {
+  const g = (rosterCache ? rosterCache.groups : []).find(x => x.intake === intake && x.name === name);
+  if (!g) return;
+  g.trainees = Math.max(0, g.trainees + (dTrainees || 0));
+  g.withAccount = Math.max(0, g.withAccount + (dLogins || 0));
 }
 
 /* ---------------- search across every intake ---------------- */
@@ -3189,10 +3213,15 @@ function wireRosterUi() {
     const input = $('newIntakeLabel');
     const label = input ? input.value.trim() : '';
     if (!label) { rosterTopStatus('Type a label for the new intake, for example JAN26.', 'warn'); return; }
-    if (await rosterAction('intake_save', { label }, `Intake ${label.toUpperCase()} added.`)) {
+    const added = label.toUpperCase();
+    if (await rosterAction('intake_save', { label }, `Intake ${added} added.`, () => {
+      if (!rosterCache) rosterCache = { intakes: [], groups: [] };
+      if (!rosterCache.intakes.some(i => i.label === added)) rosterCache.intakes.push({ label: added, status: 'active' });
+      rosterSel = { intake: added, group: '' };
+      traineeCache = [];
+    })) {
       if (input) input.value = '';
       toggleForm('addIntakeForm', null, false);
-      selectIntake(label.toUpperCase());
     }
   });
 
@@ -3203,10 +3232,18 @@ function wireRosterUi() {
     const input = $('newGroupName');
     const name = input ? input.value.trim().toUpperCase() : '';
     if (!/^G([1-9]|1[0-9]|20)$/.test(name)) { rosterTopStatus('Group names run from G1 to G20.', 'warn'); return; }
-    if (await rosterAction('group_save', { intake: rosterSel.intake, name }, `${name} added to ${rosterSel.intake}.`)) {
+    const intake = rosterSel.intake;
+    if (await rosterAction('group_save', { intake, name }, `${name} added to ${intake}.`, () => {
+      if (!rosterCache.groups.some(g => g.intake === intake && g.name === name)) {
+        rosterCache.groups.push({ intake, name, trainees: 0, withAccount: 0 });
+      }
+      rosterSel.group = name;
+      traineeCache = [];
+      selectedIds.clear();
+      traineeFilter = 'all';
+    })) {
       if (input) input.value = '';
       toggleForm('addGroupForm', null, false);
-      selectGroup(name);
     }
   });
 
@@ -3222,7 +3259,11 @@ function wireRosterUi() {
     if (!id) { rosterStatus('An EnergyTech ID is required.', 'warn'); return; }
     if (!family && !given) { rosterStatus('Enter at least one part of the name.', 'warn'); return; }
     if (await traineeAction('trainee_save', { energytechId: id, familyName: family, givenName: given, intake, group },
-        `${id.toUpperCase()} added to ${intake} / ${group}.`)) {
+        `${id.toUpperCase()} added to ${intake} / ${group}.`, () => {
+          traineeCache.push({ energytechId: id.toUpperCase(), familyName: family, givenName: given,
+                              intake, group, accountStatus: 'none' });
+          bumpGroup(intake, group, 1, 0);
+        })) {
       ['newTraineeId', 'newTraineeFamily', 'newTraineeGiven'].forEach(k => { if ($(k)) $(k).value = ''; });
       $('newTraineeId').focus();               // stay put, ready for the next one
     }
@@ -3310,10 +3351,13 @@ function wireRosterUi() {
         const label = iRename.dataset.label;
         const next = prompt(`Rename intake "${label}" to:`, label);
         if (next && next.trim() && next.trim().toUpperCase() !== label.toUpperCase()) {
-          if (await rosterAction('intake_save', { label: next.trim(), previousLabel: label }, `Renamed to ${next.trim().toUpperCase()}.`)) {
-            rosterSel.intake = next.trim().toUpperCase();
-            renderWorkspace();
-          }
+          const to = next.trim().toUpperCase();
+          await rosterAction('intake_save', { label: next.trim(), previousLabel: label }, `Renamed to ${to}.`, () => {
+            rosterCache.intakes.forEach(i => { if (i.label === label) i.label = to; });
+            rosterCache.groups.forEach(g => { if (g.intake === label) g.intake = to; });
+            traineeCache.forEach(t => { if (t.intake === label) t.intake = to; });
+            rosterSel.intake = to;
+          });
         }
         return;
       }
@@ -3321,11 +3365,11 @@ function wireRosterUi() {
       if (iDelete) {
         const label = iDelete.dataset.label;
         if (confirm(`Delete intake "${label}"? This only works if it has no groups left.`)) {
-          if (await rosterAction('intake_delete', { label }, `Intake ${label} deleted.`)) {
+          await rosterAction('intake_delete', { label }, `Intake ${label} deleted.`, () => {
+            rosterCache.intakes = rosterCache.intakes.filter(i => i.label !== label);
             rosterSel = { intake: '', group: '' };
             traineeCache = [];
-            renderWorkspace();
-          }
+          });
         }
         return;
       }
@@ -3335,22 +3379,24 @@ function wireRosterUi() {
         const next = (prompt(`Rename group "${name}" (G1–G20) to:`, name) || '').trim().toUpperCase();
         if (!next || next === name) return;
         if (!/^G([1-9]|1[0-9]|20)$/.test(next)) { rosterTopStatus('Group names run from G1 to G20.', 'warn'); return; }
-        if (await rosterAction('group_save', { intake: rosterSel.intake, name: next, previousName: name }, `Renamed to ${next}.`)) {
+        const inIntake = rosterSel.intake;
+        await rosterAction('group_save', { intake: inIntake, name: next, previousName: name }, `Renamed to ${next}.`, () => {
+          rosterCache.groups.forEach(g => { if (g.intake === inIntake && g.name === name) g.name = next; });
+          traineeCache.forEach(t => { if (t.group === name) t.group = next; });
           rosterSel.group = next;
-          renderWorkspace();
-          refreshTrainees();
-        }
+        });
         return;
       }
       const gDelete = t.closest('.group-delete');
       if (gDelete) {
         const name = gDelete.dataset.name;
         if (confirm(`Delete group "${name}" from ${rosterSel.intake}? This only works if it has no trainees left.`)) {
-          if (await rosterAction('group_delete', { intake: rosterSel.intake, name }, `${name} deleted.`)) {
+          const from = rosterSel.intake;
+          await rosterAction('group_delete', { intake: from, name }, `${name} deleted.`, () => {
+            rosterCache.groups = rosterCache.groups.filter(g => !(g.intake === from && g.name === name));
             rosterSel.group = '';
             traineeCache = [];
-            renderWorkspace();
-          }
+          });
         }
         return;
       }
@@ -3362,21 +3408,41 @@ function wireRosterUi() {
       if (tSave) {
         const row = tSave.closest('tr');
         const previousId = tSave.dataset.id;
-        const ok = await traineeAction('trainee_save', {
-          energytechId: row.querySelector('.edit-id').value.trim(),
-          previousId,
+        const next = {
+          energytechId: row.querySelector('.edit-id').value.trim().toUpperCase(),
           familyName: row.querySelector('.edit-family').value.trim(),
           givenName: row.querySelector('.edit-given').value.trim(),
-          intake: rosterSel.intake,
           group: row.querySelector('.edit-group').value
-        }, 'Saved.');
+        };
+        const before = traineeCache.find(x => x.energytechId === previousId);
+        const ok = await traineeAction('trainee_save', {
+          energytechId: next.energytechId, previousId,
+          familyName: next.familyName, givenName: next.givenName,
+          intake: rosterSel.intake, group: next.group
+        }, 'Saved.', () => {
+          editingId = '';
+          if (next.group !== rosterSel.group) {
+            // They have left the group on screen, so drop them from this list.
+            traineeCache = traineeCache.filter(x => x.energytechId !== previousId);
+            bumpGroup(rosterSel.intake, rosterSel.group, -1, before && before.accountStatus === 'active' ? -1 : 0);
+            bumpGroup(rosterSel.intake, next.group, 1, before && before.accountStatus === 'active' ? 1 : 0);
+          } else if (before) {
+            Object.assign(before, next, { intake: rosterSel.intake });
+          }
+        });
         if (ok) { editingId = ''; renderTraineePane(); }
         return;
       }
       const tDelete = t.closest('.trainee-delete');
       if (tDelete) {
         if (confirm(`Delete ${tDelete.dataset.id}? This only works if they have no submitted attempts.`)) {
-          traineeAction('trainee_delete', { energytechId: tDelete.dataset.id }, 'Trainee deleted.');
+          const gone = tDelete.dataset.id;
+          const was = traineeCache.find(x => x.energytechId === gone);
+          traineeAction('trainee_delete', { energytechId: gone }, 'Trainee deleted.', () => {
+            traineeCache = traineeCache.filter(x => x.energytechId !== gone);
+            selectedIds.delete(gone);
+            bumpGroup(rosterSel.intake, rosterSel.group, -1, was && was.accountStatus === 'active' ? -1 : 0);
+          });
         }
         return;
       }

@@ -94,9 +94,12 @@ function doPost(e) {
       return json_({ ok: true, type: 'quiz_session' });
     }
     if (payload.type === 'trainee_import') {
-      return json_(traineeImport_(payload));
+      const out = traineeImport_(payload);
+      SpreadsheetApp.flush();
+      return json_(out);
     }
     saveAttempt_(payload);
+    SpreadsheetApp.flush();
     return json_({ ok: true, type: 'quiz_attempt' });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
@@ -164,6 +167,10 @@ function doGet(e) {
   } catch (err) {
     data = { ok: false, error: String(err), stack: err && err.stack ? String(err.stack) : '' };
   }
+
+  // Any pending Sheets write is committed before the reply goes out, so the
+  // browser's next read is guaranteed to see what this call just did.
+  try { SpreadsheetApp.flush(); } catch (e) { /* nothing pending */ }
 
   if (params.callback) {
     return ContentService
@@ -472,6 +479,8 @@ const TRAINEE_HEADERS = ['Timestamp', 'EnergyTech ID', 'Family Name', 'Given Nam
                          'Intake', 'Group', 'Account Status', 'Password Hash', 'Salt',
                          'Token', 'Token Expires', 'Created By'];
 
+var ENSURED_ = {};        // reset on every execution, so it cannot go stale
+
 function rosterSheet_(name, headers) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(name);
@@ -479,8 +488,12 @@ function rosterSheet_(name, headers) {
     sheet = ss.insertSheet(name);
     sheet.appendRow(headers);
     sheet.setFrozenRows(1);
-  } else {
+    ENSURED_[name] = true;
+    return sheet;
+  }
+  if (!ENSURED_[name]) {
     ensureHeaders_(sheet, headers);
+    ENSURED_[name] = true;
   }
   return sheet;
 }
@@ -1234,6 +1247,8 @@ function buildSummary_(params) {
 }
 
 function ensureSheets_() {
+  if (ENSURED_.__all) return;              // already done earlier in this request
+  ENSURED_.__all = true;
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss.getSheetByName(SHEET_SESSIONS) || !ss.getSheetByName(SHEET_ATTEMPTS) || !ss.getSheetByName(SHEET_ITEMS)) {
     setup();
