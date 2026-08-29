@@ -937,13 +937,15 @@ function renderQuestion(q, index) {
   </article>`;
 }
 
-function buildQuizFromSettings(settings = {}, target = 'teacher') {
+/* The exact list of questions a set of settings produces. Pure: it touches no
+ * globals and no DOM, so a past attempt can be rebuilt from the seed, key,
+ * count and order stored with it and shown back question by question. */
+function selectQuestionsFor(settings = {}) {
   const setKey = settings.questionSetKey || activeSetKey();
   // The pool is whatever the instructor ticked -- possibly spanning several
   // papers. Each question carries its own paper, so a mixed quiz still renders
   // the right diagram and links the right video.
   const bank = questionsFromSelection(decodeSelection(setKey));
-  currentSetKey = setKey;
   const requested = Number(settings.questionCount
     || ($('questionCount') ? $('questionCount').value : 30)) || 30;
   const n = Math.max(0, Math.min(requested, bank.length));
@@ -961,6 +963,12 @@ function buildQuizFromSettings(settings = {}, target = 'teacher') {
   } else {
     selected = shuffle(selected, rng);
   }
+  return { setKey, selected, n };
+}
+
+function buildQuizFromSettings(settings = {}, target = 'teacher') {
+  const { setKey, selected, n } = selectQuestionsFor(settings);
+  currentSetKey = setKey;
 
   currentQuiz = selected;
   lastFeedback = null;
@@ -2704,7 +2712,7 @@ function traineeRow(t, opts) {
   return `<tr>
     ${box}
     <td class="mono">${id}</td>
-    <td class="trainee-name">${escapeHtml(t.name || '')}</td>
+    <td class="trainee-name"><button type="button" class="name-link open-profile" data-id="${id}">${escapeHtml(t.name || '')}</button></td>
     ${where}
     <td>${accountBadge(t.accountStatus || 'none')}</td>
     <td class="row-actions">
@@ -3161,6 +3169,199 @@ function studentIdentity() {
   }
   return { name: '', group: '', energytechId: '', intake: '', token: '' };
 }
+
+/* ==========================================================================
+ * Trainee profile: one person's record, and one attempt in full
+ * ========================================================================== */
+
+let profileId = '';          // trainee whose profile is open, '' when closed
+let profileData = null;
+
+function showRoster() {
+  profileId = '';
+  profileData = null;
+  if ($('traineeProfileView')) $('traineeProfileView').hidden = true;
+  if ($('rosterWorkspace')) $('rosterWorkspace').hidden = false;
+  if ($('rosterSearch')) $('rosterSearch').closest('.roster-toolbar').hidden = false;
+}
+
+async function openProfile(energytechId) {
+  profileId = energytechId;
+  profileData = null;
+  if ($('rosterWorkspace')) $('rosterWorkspace').hidden = true;
+  if ($('rosterSearch')) $('rosterSearch').closest('.roster-toolbar').hidden = true;
+  if ($('traineeProfileView')) $('traineeProfileView').hidden = false;
+  if ($('profileCrumb')) $('profileCrumb').textContent = energytechId;
+  if ($('profileBody')) $('profileBody').innerHTML = '<p class="pane-empty">Loading&hellip;</p>';
+  if ($('traineeProfileView')) $('traineeProfileView').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  try {
+    const data = await rosterCall('trainee_history', { token: authToken, energytechId }, 'energytechHistory', 1);
+    if (!data.ok) {
+      $('profileBody').innerHTML = `<div class="feedback bad">${escapeHtml(data.error || 'Could not load this trainee.')}</div>`;
+      return;
+    }
+    profileData = data;
+    renderProfile();
+  } catch (err) {
+    $('profileBody').innerHTML = `<div class="feedback bad">${escapeHtml(err.message || String(err))}</div>`;
+  }
+}
+
+function whenText(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function scoreBand(percent) {
+  return percent >= 80 ? 'good' : percent >= 50 ? 'warn' : 'bad';
+}
+
+function renderProfile() {
+  const { trainee, attempts, lessons } = profileData;
+  if ($('profileCrumb')) $('profileCrumb').textContent = `${trainee.name || trainee.energytechId}`;
+
+  const done = attempts.length;
+  const avg = done ? Math.round(attempts.reduce((a, x) => a + x.percent, 0) / done) : 0;
+  const best = done ? Math.max(...attempts.map(x => x.percent)) : 0;
+  const answered = lessons.reduce((a, l) => a + l.total, 0);
+
+  // Only lessons with enough questions to mean anything, weakest first.
+  const weak = lessons.filter(l => l.total >= 2 && l.percent < 100).slice(0, 5);
+
+  $('profileBody').innerHTML = `
+    <header class="profile-head">
+      <div>
+        <h3>${escapeHtml(trainee.name || '(no name)')}</h3>
+        <p class="profile-sub"><span class="mono">${escapeHtml(trainee.energytechId)}</span>
+          · ${escapeHtml(trainee.intake || '—')} / ${escapeHtml(trainee.group || '—')}
+          · ${accountBadge(trainee.accountStatus || 'none')}</p>
+      </div>
+    </header>
+
+    <div class="stat-row">
+      <div class="stat"><span class="stat-value">${done}</span><span class="stat-label">quiz${done === 1 ? '' : 'zes'} taken</span></div>
+      <div class="stat"><span class="stat-value ${done ? scoreBand(avg) + '-text' : ''}">${done ? avg + '%' : '—'}</span><span class="stat-label">average</span></div>
+      <div class="stat"><span class="stat-value">${done ? best + '%' : '—'}</span><span class="stat-label">best</span></div>
+      <div class="stat"><span class="stat-value">${answered}</span><span class="stat-label">questions answered</span></div>
+    </div>
+
+    <h4 class="profile-h">Weakest lessons</h4>
+    ${weak.length ? `<ul class="lesson-bars">${weak.map(l => `
+      <li>
+        <span class="lesson-name">Lesson ${escapeHtml(l.lesson)}</span>
+        <span class="bar"><span class="bar-fill ${scoreBand(l.percent)}" style="width:${Math.max(l.percent, 2)}%"></span></span>
+        <span class="lesson-score ${scoreBand(l.percent)}-text">${l.percent}%</span>
+        <span class="lesson-count">${l.correct} of ${l.total}</span>
+      </li>`).join('')}</ul>`
+      : `<p class="pane-empty">${answered
+          ? 'Nothing stands out yet — every lesson with more than one question is at 100%.'
+          : 'No questions answered yet, so there is nothing to analyse.'}</p>`}
+
+    <h4 class="profile-h">History</h4>
+    ${done ? `<div class="table-wrap"><table class="dashboard-table history-table">
+        <thead><tr><th>When</th><th>Session</th><th>Covering</th><th>Mode</th><th>Score</th><th></th></tr></thead>
+        <tbody>${attempts.map(a => `
+          <tr>
+            <td>${escapeHtml(whenText(a.timestamp))}</td>
+            <td>${escapeHtml(a.sessionName || a.sessionCode || '—')}<br><span class="mono hint">${escapeHtml(a.sessionCode)}</span></td>
+            <td>${escapeHtml(a.questionSet || '—')}</td>
+            <td><span class="mode-pill ${escapeHtml(a.mode || 'practice')}">${escapeHtml((a.mode || 'practice').toUpperCase())}</span></td>
+            <td class="score-cell"><strong class="${scoreBand(a.percent)}-text">${a.score} / ${a.total}</strong> <span class="hint">${a.percent}%</span></td>
+            <td class="row-actions"><button type="button" class="icon-btn open-attempt" data-attempt="${escapeHtml(a.attemptId)}">See answers</button></td>
+          </tr>`).join('')}</tbody></table></div>`
+      : '<p class="pane-empty">This trainee has not sat a quiz yet.</p>'}`;
+}
+
+/* ---------------- one attempt, question by question ---------------- */
+
+async function openAttempt(attemptId) {
+  if ($('profileBody')) $('profileBody').innerHTML = '<p class="pane-empty">Loading the answers&hellip;</p>';
+  try {
+    const data = await rosterCall('attempt_detail', { token: authToken, attemptId }, 'energytechAttempt', 1);
+    if (!data.ok) {
+      $('profileBody').innerHTML = `<div class="feedback bad">${escapeHtml(data.error || 'Could not load that attempt.')}</div>
+        <div class="button-row"><button type="button" id="backToProfileBtn" class="secondary">Back to the profile</button></div>`;
+      return;
+    }
+    renderAttempt(data);
+  } catch (err) {
+    $('profileBody').innerHTML = `<div class="feedback bad">${escapeHtml(err.message || String(err))}</div>
+      <div class="button-row"><button type="button" id="backToProfileBtn" class="secondary">Back to the profile</button></div>`;
+  }
+}
+
+/* The questions themselves are not stored with the attempt -- only the answers
+ * are. They are rebuilt from the seed, set key, count and order that were saved
+ * with it, which is exactly how the trainee's paper was generated in the first
+ * place, so question N here is question N as they saw it. */
+function rebuildAttemptQuestions(attempt) {
+  try {
+    const { selected } = selectQuestionsFor({
+      questionSetKey: attempt.questionSetKey,
+      questionCount: attempt.questionCount,
+      seed: attempt.seed,
+      orderMode: attempt.orderMode
+    });
+    return selected;
+  } catch { return []; }
+}
+
+function renderAttempt(data) {
+  const { attempt, items } = data;
+  const questions = rebuildAttemptQuestions(attempt);
+  // If the bank has changed since, the rebuild will not line up; say so rather
+  // than showing the wrong question next to an answer.
+  const trustworthy = questions.length === items.length && items.length > 0;
+
+  const cards = items.map(it => {
+    const q = trustworthy ? questions[it.quizNumber - 1] : null;
+    const verdict = it.result === 'correct' ? 'correct' : it.result === 'wrong' ? 'wrong' : 'skipped';
+    const label = { correct: 'Correct', wrong: 'Wrong', skipped: 'Not answered' }[verdict];
+    let body = '';
+    if (q) {
+      const choices = splitChoices(q.choices);
+      body = `<div class="q-body">${renderText(q.body).replace('[[DIAGRAM]]', diagramSvg(q))}</div>
+        <div class="q-choices review">${choices.map(ch => {
+          const picked = ch.letter === it.answer;
+          const right = ch.letter === it.correctAnswer;
+          const cls = right ? 'is-right' : picked ? 'is-picked-wrong' : '';
+          const mark = right ? '&#10003;' : picked ? '&#10007;' : '';
+          return `<div class="choice ${cls}"><span class="choice-mark">${mark}</span>
+            <span>${ch.letter}) ${renderText(ch.text)}</span></div>`;
+        }).join('')}</div>`;
+    } else {
+      body = `<p class="hint">Answered <strong>${escapeHtml(it.answer || '—')}</strong>, correct answer <strong>${escapeHtml(it.correctAnswer)}</strong>.</p>`;
+    }
+    return `<article class="question-card review-card ${verdict}">
+      <div class="q-head">Q${it.quizNumber}
+        <span class="lesson">${escapeHtml(it.lesson)}</span>
+        ${it.originalNumber ? `<span class="original">Original Q${it.originalNumber}</span>` : ''}
+        <span class="verdict ${verdict}">${label}</span></div>
+      ${body}
+    </article>`;
+  }).join('');
+
+  $('profileBody').innerHTML = `
+    <div class="button-row">
+      <button type="button" id="backToProfileBtn" class="secondary">&#8592; Back to ${escapeHtml(attempt.name || 'the profile')}</button>
+    </div>
+    <header class="profile-head">
+      <div>
+        <h3>${escapeHtml(attempt.sessionName || attempt.sessionCode)}</h3>
+        <p class="profile-sub">${escapeHtml(whenText(attempt.timestamp))}
+          · ${escapeHtml(attempt.questionSet || '')}
+          · <span class="mode-pill ${escapeHtml(attempt.mode || 'practice')}">${escapeHtml((attempt.mode || 'practice').toUpperCase())}</span></p>
+      </div>
+      <div class="attempt-score ${scoreBand(attempt.percent)}-text">${attempt.score} / ${attempt.total}
+        <span>${attempt.percent}%</span></div>
+    </header>
+    ${trustworthy ? '' : `<div class="feedback warn">The questions could not be rebuilt for this attempt, so only the answers are shown. This happens when the question bank has changed since it was sat.</div>`}
+    <div class="review-list">${cards}</div>`;
+  if ($('traineeProfileView')) $('traineeProfileView').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 /* ---------------- event wiring ---------------- */
 
 function wireRosterUi() {
@@ -3400,6 +3601,9 @@ function wireRosterUi() {
         return;
       }
 
+      const nameLink = t.closest('.open-profile');
+      if (nameLink) { openProfile(nameLink.dataset.id); return; }
+
       const tEdit = t.closest('.trainee-edit');
       if (tEdit) { editingId = tEdit.dataset.id; renderTraineePane(); return; }
       if (t.closest('.cancel-edit')) { editingId = ''; renderTraineePane(); return; }
@@ -3465,6 +3669,16 @@ function wireRosterUi() {
       if (groupRow) { selectGroup(groupRow.dataset.group); return; }
     });
   }
+
+  /* --- trainee profile --- */
+  if ($('profileBackBtn')) $('profileBackBtn').addEventListener('click', showRoster);
+  if ($('traineeProfileView')) $('traineeProfileView').addEventListener('click', e => {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    const openBtn = t.closest('.open-attempt');
+    if (openBtn) { openAttempt(openBtn.dataset.attempt); return; }
+    if (t.closest('#backToProfileBtn')) { renderProfile(); return; }
+  });
 
   /* --- the import preview is rendered outside the workspace grid --- */
   document.addEventListener('click', e => {

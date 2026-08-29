@@ -147,6 +147,10 @@ function doGet(e) {
       data = traineeSave_(params);
     } else if (params.action === 'trainee_delete') {
       data = traineeDelete_(params);
+    } else if (params.action === 'trainee_history') {
+      data = traineeHistory_(params);
+    } else if (params.action === 'attempt_detail') {
+      data = attemptDetail_(params);
     } else if (params.action === 'trainee_move') {
       data = traineeMove_(params);
     } else if (params.action === 'trainee_set_account') {
@@ -1158,6 +1162,119 @@ function saveAttempt_(p) {
   if (rows.length) {
     writeRows_(items, items.getLastRow() + 1, rows, [3, 4, 5]);
   }
+}
+
+/* One trainee's whole record: every attempt, plus how they do lesson by lesson.
+ * The lesson tally is what turns a list of scores into something an instructor
+ * can act on -- it names the topics to go back over. */
+function traineeHistory_(params) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  const id = normId_(params.energytechId);
+  if (!id) return { ok: false, error: 'No trainee named.' };
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const isAdmin = auth.instructor.role === 'admin';
+  const viewer = normalizeUsername_(auth.instructor.username);
+  const mine = owner => isAdmin || normalizeUsername_(owner) === viewer;
+
+  const found = findTraineeRow_(traineesSheet_(), id);
+  const trainee = found ? traineePublic_(found.row) : { energytechId: id, name: '', intake: '', group: '', accountStatus: 'none' };
+
+  const attempts = [];
+  rowsOf_(ss.getSheetByName(SHEET_ATTEMPTS)).forEach(row => {
+    if (normId_(row[4]) !== id || !mine(row[19])) return;
+    attempts.push({
+      timestamp: row[0] instanceof Date ? row[0].toISOString() : String(row[0] || ''),
+      attemptId: String(row[1] || ''),
+      sessionCode: String(row[5] || ''),
+      sessionName: String(row[6] || ''),
+      mode: String(row[7] || ''),
+      questionSet: String(row[8] || ''),
+      questionSetKey: String(row[9] || ''),
+      seed: String(row[10] || ''),
+      questionCount: Number(row[11] || 0),
+      orderMode: String(row[12] || 'original'),
+      score: Number(row[13] || 0),
+      total: Number(row[14] || 0),
+      percent: Number(row[15] || 0)
+    });
+  });
+  attempts.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+
+  // Lesson tallies come from the item rows, which carry the lesson per question.
+  const tally = {};
+  rowsOf_(ss.getSheetByName(SHEET_ITEMS)).forEach(row => {
+    if (normId_(row[4]) !== id || !mine(row[17])) return;
+    const lesson = String(row[13] || '').trim();
+    if (!lesson) return;
+    if (!tally[lesson]) tally[lesson] = { lesson: lesson, correct: 0, total: 0 };
+    tally[lesson].total++;
+    if (String(row[16] || '').toLowerCase() === 'correct') tally[lesson].correct++;
+  });
+  const lessons = Object.keys(tally).map(k => {
+    const t = tally[k];
+    t.percent = t.total ? Math.round((t.correct / t.total) * 100) : 0;
+    return t;
+  }).sort((a, b) => a.percent - b.percent || b.total - a.total);
+
+  return { ok: true, trainee: trainee, attempts: attempts, lessons: lessons };
+}
+
+/* Every question of one attempt, so it can be shown back the way the trainee
+ * saw it when they submitted. */
+function attemptDetail_(params) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  const attemptId = String(params.attemptId || '').trim();
+  if (!attemptId) return { ok: false, error: 'No attempt named.' };
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const isAdmin = auth.instructor.role === 'admin';
+  const viewer = normalizeUsername_(auth.instructor.username);
+
+  let attempt = null;
+  rowsOf_(ss.getSheetByName(SHEET_ATTEMPTS)).forEach(row => {
+    if (String(row[1] || '') !== attemptId) return;
+    if (!isAdmin && normalizeUsername_(row[19]) !== viewer) return;
+    attempt = {
+      timestamp: row[0] instanceof Date ? row[0].toISOString() : String(row[0] || ''),
+      attemptId: attemptId,
+      name: String(row[2] || ''),
+      group: String(row[3] || ''),
+      energytechId: String(row[4] || ''),
+      sessionCode: String(row[5] || ''),
+      sessionName: String(row[6] || ''),
+      mode: String(row[7] || ''),
+      questionSet: String(row[8] || ''),
+      questionSetKey: String(row[9] || ''),
+      seed: String(row[10] || ''),
+      questionCount: Number(row[11] || 0),
+      orderMode: String(row[12] || 'original'),
+      score: Number(row[13] || 0),
+      total: Number(row[14] || 0),
+      percent: Number(row[15] || 0),
+      intake: String(row[21] || ''),
+      registered: String(row[22] || '')
+    };
+  });
+  if (!attempt) return { ok: false, error: 'That attempt is not on record, or belongs to another instructor.' };
+
+  const items = [];
+  rowsOf_(ss.getSheetByName(SHEET_ITEMS)).forEach(row => {
+    if (String(row[1] || '') !== attemptId) return;
+    items.push({
+      quizNumber: Number(row[11] || 0),
+      originalNumber: Number(row[12] || 0),
+      lesson: String(row[13] || ''),
+      answer: String(row[14] || ''),
+      correctAnswer: String(row[15] || ''),
+      result: String(row[16] || '')
+    });
+  });
+  items.sort((a, b) => a.quizNumber - b.quizNumber);
+
+  return { ok: true, attempt: attempt, items: items };
 }
 
 function buildSummary_(params) {

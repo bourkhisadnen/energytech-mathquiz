@@ -244,6 +244,16 @@
         </div>
         <div id="rosterStatusLine" class="feedback empty" hidden></div>
 
+        <!-- One trainee's record. Replaces the three panes so it has the full
+             width for a question-by-question review. -->
+        <section id="traineeProfileView" class="profile-view" hidden>
+          <nav class="profile-crumbs">
+            <button type="button" class="crumb-back" id="profileBackBtn">&#8592; Back to the roster</button>
+            <span id="profileCrumb" class="crumb-here"></span>
+          </nav>
+          <div id="profileBody"></div>
+        </section>
+
         <div class="roster-workspace" id="rosterWorkspace">
 
           <section class="roster-pane" id="paneIntakes" aria-label="Intakes">

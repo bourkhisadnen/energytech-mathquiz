@@ -823,3 +823,84 @@ a.list-pill {
 .roster-table .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
 .roster-table .where { font-size: .84rem; color: var(--muted); white-space: nowrap; }
 .trainee-edit-row td { background: #fbfdff; }
+
+/* ==========================================================================
+   Trainee profile and attempt review
+   ========================================================================== */
+
+.profile-view { border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 0 0 18px; }
+.profile-crumbs {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--light); border-bottom: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+}
+.crumb-back {
+  background: none; border: 1px solid var(--accent); color: var(--accent);
+  border-radius: 7px; padding: 5px 11px; font-size: .84rem; font-weight: 600; cursor: pointer;
+}
+.crumb-back:hover { background: var(--accent); color: #fff; }
+.crumb-here { font-weight: 650; color: var(--blue); }
+
+#profileBody { padding: 0 16px; }
+.profile-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin: 16px 0 4px;
+}
+.profile-head h3 { margin: 0; color: var(--blue); font-size: 1.25rem; }
+.profile-sub { margin: 4px 0 0; color: var(--muted); font-size: .9rem; }
+.profile-h { margin: 22px 0 8px; color: var(--blue); font-size: 1rem; }
+.attempt-score { font-size: 1.5rem; font-weight: 800; line-height: 1.1; text-align: right; }
+.attempt-score span { display: block; font-size: .85rem; font-weight: 600; opacity: .8; }
+
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 14px 0 4px; }
+.stat { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; background: var(--light); }
+.stat-value { display: block; font-size: 1.5rem; font-weight: 800; color: var(--blue); font-variant-numeric: tabular-nums; }
+.stat-label { display: block; font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.good-text { color: var(--good); }
+.bad-text { color: var(--bad); }
+
+.lesson-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.lesson-bars li { display: grid; grid-template-columns: minmax(110px, auto) 1fr auto auto; gap: 10px; align-items: center; }
+.lesson-name { font-weight: 600; }
+.bar { display: block; height: 9px; border-radius: 999px; background: #e6edf4; overflow: hidden; }
+.bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.bar-fill.good { background: var(--good); }
+.bar-fill.warn { background: #d79a2b; }
+.bar-fill.bad { background: var(--bad); }
+.lesson-score { font-weight: 700; font-variant-numeric: tabular-nums; }
+.lesson-count { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+
+.history-table td { vertical-align: middle; }
+.history-table .score-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.name-link {
+  background: none; border: 0; padding: 0; font: inherit; color: var(--accent);
+  cursor: pointer; text-align: left; text-decoration: underline; text-underline-offset: .15em;
+}
+.name-link:hover { color: var(--blue); }
+.name-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+.review-list { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.review-card { border-left: 4px solid var(--border); }
+.review-card.correct { border-left-color: var(--good); }
+.review-card.wrong { border-left-color: var(--bad); }
+.review-card.skipped { border-left-color: var(--warn); }
+.verdict { margin-left: auto; font-size: .76rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.verdict.correct { color: var(--good); }
+.verdict.wrong { color: var(--bad); }
+.verdict.skipped { color: var(--warn); }
+.q-choices.review { display: flex; flex-direction: column; gap: 5px; }
+.q-choices.review .choice {
+  display: flex; gap: 8px; align-items: baseline;
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 11px; background: var(--card);
+}
+.q-choices.review .choice.is-right { border-color: var(--good); background: #eaf7ee; }
+.q-choices.review .choice.is-picked-wrong { border-color: var(--bad); background: #fff2f2; }
+.choice-mark { flex: 0 0 1rem; font-weight: 800; }
+.is-right .choice-mark { color: var(--good); }
+.is-picked-wrong .choice-mark { color: var(--bad); }
+
+@media (max-width: 620px) {
+  .lesson-bars li { grid-template-columns: 1fr auto; }
+  .lesson-bars .bar { grid-column: 1 / -1; }
+}

@@ -338,6 +338,31 @@ Deleting a trainee is refused once they have submitted an attempt, because their
 would lose their owner. Revoke their login instead — the row and the results stay, and they
 can no longer sign in.
 
+### Trainee profiles
+
+**Click a trainee's name** anywhere in the roster — including in search results — to open
+their record. It replaces the three panes so there is room for it, with a breadcrumb back.
+
+- **The figures**: quizzes taken, average, best, and how many questions they have answered.
+- **Weakest lessons**: every lesson they have been asked about, ranked worst first, with the
+  percentage and the counts behind it. Lessons with only one question, and lessons they get
+  right every time, are left out — this is a list of what to go back over, not a full table.
+- **History**: every attempt, newest first, with when, which session, what it covered, the
+  mode and the score.
+
+**Press "See answers"** on any attempt to see that paper question by question — the question
+itself, the four choices, the one they picked and the right one, marked. It is the same view
+the trainee gets on submitting, after the fact.
+
+The questions are not stored with the attempt; only the answers are. They are rebuilt from
+the seed, question set, count and order saved with the attempt — the same inputs that
+generated the paper in the first place, so question 3 here is the question 3 they sat. If
+the question bank has changed since, the rebuild will not line up, and the page says so and
+falls back to showing the recorded letters rather than putting the wrong question next to an
+answer.
+
+Instructors see only attempts from their own sessions; admins see all of them.
+
 ### CSV import — one file for the whole intake
 
 Select the intake, press **Import CSV**, and give it one file for everyone. Three columns:

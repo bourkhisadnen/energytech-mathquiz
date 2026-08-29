@@ -234,7 +234,7 @@ window.QUESTION_BANK_SETS = {
         "lesson": "1-7.2",
         "body": "Find the length of the shaft in the below illustration.\\par[[DIAGRAM]]\\par",
         "choices": "\\item $2\\frac{1}{8}$ in \\item $4\\frac{1}{4}$ in \\item $4\\frac{5}{8}$ in \\item $8\\frac{7}{8}$ in",
-        "answer": "c",
+        "answer": "d",
         "diagram": {
           "type": "image",
           "src": "images/original_q28_shaft.png"
@@ -1969,7 +1969,7 @@ window.QUESTION_BANK_SETS = {
         "original_number": 9,
         "compact": false,
         "lesson": "1-1.2",
-        "body": "Multiply\\par\\vspace{2pt}\\centerline{$8,640\\\\times50$}",
+        "body": "Multiply\\par\\vspace{2pt}\\centerline{$8,640\\times50$}",
         "choices": "\\item 432,000 \\item 8,690 \\item 457,000 \\item 4,320 ",
         "answer": "a"
       },
@@ -1985,7 +1985,7 @@ window.QUESTION_BANK_SETS = {
         "original_number": 11,
         "compact": false,
         "lesson": "1-1.3",
-        "body": "Divide (use the remainder form $a\\;R\\;b$, where $a$ is the quotient and $b$ is the remainder).\\par\\vspace{2pt}\\centerline{$7,318\\\\div18$}",
+        "body": "Divide (use the remainder form $a\\;R\\;b$, where $a$ is the quotient and $b$ is the remainder).\\par\\vspace{2pt}\\centerline{$7,318\\div18$}",
         "choices": "\\item 406 R 10 \\item 407 R 0 \\item 398 R 154 \\item 406 R 18 ",
         "answer": "a"
       },
@@ -1993,7 +1993,7 @@ window.QUESTION_BANK_SETS = {
         "original_number": 12,
         "compact": false,
         "lesson": "1-1.3",
-        "body": "Divide (use the remainder form $a\\;R\\;b$, where $a$ is the quotient and $b$ is the remainder).\\par\\vspace{2pt}\\centerline{$23,491\\\\div54$}",
+        "body": "Divide (use the remainder form $a\\;R\\;b$, where $a$ is the quotient and $b$ is the remainder).\\par\\vspace{2pt}\\centerline{$23,491\\div54$}",
         "choices": "\\item 436 R 0 \\item 435 R 1 \\item 427 R 433 \\item 435 R 54 ",
         "answer": "b"
       },
@@ -2105,9 +2105,9 @@ window.QUESTION_BANK_SETS = {
         "original_number": 26,
         "compact": false,
         "lesson": "1-7.1",
-        "body": "Find the LCD of $\\dfrac{1}{9}$, $\\dfrac{1}{3}$ and $\\dfrac{1}{18}$.",
+        "body": "Find the LCD of $\\dfrac{1}{9}$, $\\dfrac{1}{12}$ and $\\dfrac{1}{15}$.",
         "choices": "\\item 45 \\item 180 \\item 90 \\item 30 ",
-        "answer": "c"
+        "answer": "b"
       },
       {
         "original_number": 27,
@@ -2925,7 +2925,7 @@ window.QUESTION_BANK_SETS = {
         "original_number": 9,
         "compact": false,
         "lesson": "1-1.2",
-        "body": "Multiply\\par\\vspace{2pt}\\centerline{$6,950\\\\times60$}",
+        "body": "Multiply\\par\\vspace{2pt}\\centerline{$6,950\\times60$}",
         "choices": "\\item 417,000 \\item 7,010 \\item 442,000 \\item 4,170 ",
         "answer": "a"
       },
@@ -2941,7 +2941,7 @@ window.QUESTION_BANK_SETS = {
         "original_number": 11,
         "compact": false,
         "lesson": "1-1.3",
-        "body": "Divide (use the remainder form $a\\;R\\;b$, where $a$ is the quotient and $b$ is the remainder).\\par\\vspace{2pt}\\centerline{$6,425\\\\div17$}",
+        "body": "Divide (use the remainder form $a\\;R\\;b$, where $a$ is the quotient and $b$ is the remainder).\\par\\vspace{2pt}\\centerline{$6,425\\div17$}",
         "choices": "\\item 377 R 16 \\item 378 R 0 \\item 369 R 152 \\item 377 R 17 ",
         "answer": "a"
       },
@@ -2949,7 +2949,7 @@ window.QUESTION_BANK_SETS = {
         "original_number": 12,
         "compact": false,
         "lesson": "1-1.3",
-        "body": "Divide (use the remainder form $a\\;R\\;b$, where $a$ is the quotient and $b$ is the remainder).\\par\\vspace{2pt}\\centerline{$28,576\\\\div63$}",
+        "body": "Divide (use the remainder form $a\\;R\\;b$, where $a$ is the quotient and $b$ is the remainder).\\par\\vspace{2pt}\\centerline{$28,576\\div63$}",
         "choices": "\\item 454 R 0 \\item 453 R 37 \\item 445 R 541 \\item 453 R 63 ",
         "answer": "b"
       },
