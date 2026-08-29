@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EnergyTech Mathematics Quiz App</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="style.css" />
+  <meta name="theme-color" content="#006fae" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>EnergyTech Mathematics Quiz App</h1>
+      <p>Instructor-controlled sessions, trainee submission, and question analysis.</p>
+    </div>
+    <div class="header-actions">
+      <button id="homeBtn" class="secondary">Home</button>
+      <button id="installBtn" class="secondary" hidden>Install app</button>
+      <button id="printBtn" class="secondary">Print / Save PDF</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel landing-panel" id="landingPanel">
+      <h2>Choose your role</h2>
+      <p class="hint">Trainees take assigned quizzes using a session code. Instructors create sessions and monitor results.</p>
+      <div class="role-grid">
+        <button id="studentModeBtn" class="role-card">
+          <span class="role-title">Trainee</span>
+          <span class="role-subtitle">Enter your details and session code</span>
+        </button>
+        <button id="teacherModeBtn" class="role-card teacher-role">
+          <span class="role-title">Instructor</span>
+          <span class="role-subtitle">Create sessions and view dashboard</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="panel teacher-login-panel" id="teacherLoginPanel" hidden>
+      <h2>Instructor login</h2>
+      <div class="grid student-grid">
+        <label>
+          Username
+          <input id="teacherLoginUsername" autocomplete="username" placeholder="Your instructor username" />
+        </label>
+        <label>
+          Password
+          <input id="teacherLoginPassword" type="password" autocomplete="current-password" placeholder="Your instructor password" />
+        </label>
+      </div>
+      <div class="button-row">
+        <button id="teacherLoginBtn">Log in</button>
+        <button id="toggleSignupBtn" class="secondary" type="button">Need an account? Request one</button>
+        <button id="backFromInstructorLoginBtn" class="secondary">Back</button>
+      </div>
+      <div id="teacherLoginStatus" class="feedback empty">Enter your instructor username and password to continue.</div>
+
+      <div id="teacherSignupPanel" class="signup-panel" hidden>
+        <h3>Request an instructor account</h3>
+        <p class="hint">An admin has to approve your request before you can log in.</p>
+        <div class="grid student-grid">
+          <label>
+            Your name
+            <input id="signupDisplayName" autocomplete="name" placeholder="e.g. Jane Carter" />
+          </label>
+          <label>
+            Choose a username
+            <input id="signupUsername" autocomplete="username" placeholder="e.g. jcarter" />
+          </label>
+          <label>
+            Choose a password
+            <input id="signupPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
+          </label>
+          <label>
+            Confirm password
+            <input id="signupConfirmPassword" type="password" autocomplete="new-password" placeholder="Repeat password" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="requestAccountBtn" type="button">Request account</button>
+        </div>
+        <div id="signupStatus" class="feedback empty">Fill in the fields above and request an account.</div>
+      </div>
+    </section>
+
+    <section id="teacherInterface" hidden>
+      <section class="panel account-bar-panel">
+        <div class="account-bar">
+          <div id="instructorAccountBar">Logged in.</div>
+          <button id="logoutBtn" class="secondary" type="button">Log out</button>
+        </div>
+      </section>
+
+      <section class="panel dashboard-panel">
+        <h2>Instructor connection setup</h2>
+        <p class="hint">Paste the Google Apps Script Web App URL. It is needed to save sessions, receive trainee results, and load the dashboard.</p>
+        <div class="grid dashboard-grid">
+          <label>
+            Google Apps Script Web App URL
+            <input id="webAppUrl" placeholder="https://script.google.com/macros/s/..." />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="saveWebAppUrlBtn" class="secondary">Save URL</button>
+        </div>
+        <div id="onlineStatus" class="feedback empty">Online collection is optional, but recommended for class use.</div>
+      </section>
+
+      <section class="panel">
+        <h2>Change my password</h2>
+        <div class="grid student-grid">
+          <label>
+            Current password
+            <input id="changeOldPassword" type="password" autocomplete="current-password" placeholder="Current password" />
+          </label>
+          <label>
+            New password
+            <input id="changeNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="changePasswordBtn" class="secondary">Change password</button>
+        </div>
+      </section>
+
+      <section class="panel setup-panel" id="setupPanel">
+        <h2>Create quiz session</h2>
+
+        <div class="selection-block">
+          <h3>1. Choose what the quiz covers</h3>
+          <p class="hint">Tick a whole chapter, a version, a lesson, or individual questions. You can mix chapters and versions in one quiz.</p>
+          <div class="button-row selection-actions">
+            <button type="button" id="selAllBtn" class="secondary">Select all</button>
+            <button type="button" id="selNoneBtn" class="secondary">Clear</button>
+            <button type="button" id="selExpandBtn" class="secondary">Expand all</button>
+            <button type="button" id="selCollapseBtn" class="secondary">Collapse all</button>
+          </div>
+          <div id="questionTree" class="question-tree"></div>
+          <div id="selectionSummary" class="feedback warn">Nothing selected yet.</div>
+        </div>
+
+        <h3>2. Session settings</h3>
+        <div class="grid setup-grid">
+          <label>
+            Session name
+            <input id="sessionName" placeholder="Named from your selection" />
+          </label>
+          <label>
+            Intake
+            <select id="sessionIntake"><option value="">— none —</option></select>
+          </label>
+          <label>
+            Group
+            <select id="sessionGroup"><option value="">— none —</option></select>
+          </label>
+          <label class="count-label">
+            Number of questions
+            <span class="count-control">
+              <button type="button" id="countMinusBtn" class="count-step" aria-label="One fewer question">−</button>
+              <input id="questionCount" type="number" min="1" max="1" value="30" inputmode="numeric" aria-label="Number of questions" />
+              <button type="button" id="countPlusBtn" class="count-step" aria-label="One more question">+</button>
+              <button type="button" id="countAllBtn" class="secondary count-all">All</button>
+            </span>
+            <input id="questionCountRange" type="range" min="1" max="1" value="30" class="count-range" aria-label="Number of questions slider" />
+            <span class="hint count-hint" id="countHint">select some questions first</span>
+          </label>
+          <label>
+            Random seed
+            <input id="seedInput" value="20260627" inputmode="numeric" />
+          </label>
+          <label>
+            Question order
+            <select id="orderMode">
+              <option value="original">Keep original order after selection</option>
+              <option value="shuffled">Shuffle selected questions</option>
+            </select>
+          </label>
+          <label>
+            Quiz mode
+            <select id="sessionMode">
+              <option value="practice" selected>Practice Mode — show score and feedback</option>
+              <option value="assessment">Assessment Mode — hide feedback from trainees</option>
+            </select>
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="showOriginalNumbers" checked />
+            Show original question numbers
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="allowWalkIn" />
+            Allow trainees without an account to sit this one
+          </label>
+        </div>
+        <div class="require-note">Trainees must answer <strong>all questions</strong> before submitting.</div>
+        <div class="button-row">
+          <button id="createSessionBtn">Create session code</button>
+          <button id="previewSessionBtn" class="secondary">Preview teacher copy</button>
+          <button id="newSeedBtn" class="secondary">New seed</button>
+          <button id="copyReferenceBtn" class="secondary">Copy teacher reference</button>
+        </div>
+        <div id="sessionStatus" class="feedback empty">Create a session, then give the code to trainees.</div>
+      </section>
+
+      <section id="teacherPreviewArea" hidden>
+        <section id="quizSummary" class="quiz-summary" aria-live="polite"></section>
+        <section id="quizContainer" class="quiz-container"></section>
+
+        <section class="panel result-panel" id="resultPanel">
+          <h2>Instructor preview</h2>
+          <div class="button-row">
+            <button id="submitBtn">Check preview answers</button>
+            <button id="resetAnswersBtn" class="secondary">Clear answers</button>
+            <button id="downloadResultBtn" class="secondary">Download preview result</button>
+          </div>
+          <div id="feedback" class="feedback empty">Preview the quiz here before giving the code to trainees.</div>
+        </section>
+      </section>
+
+      <section class="panel dashboard-panel" id="dashboardPanel">
+        <h2>Instructor dashboard</h2>
+        <p class="hint">Load submitted results to identify lowest performers, problematic questions, and problematic lessons.</p>
+        <div class="button-row">
+          <button id="loadDashboardBtn">Load instructor dashboard</button>
+          <button id="downloadActivityBtn" class="secondary">⬇ Download trainee activity (CSV)</button>
+          <button id="exportDashboardCsvBtn" class="secondary">⬇ Download full analysis (CSV)</button>
+          <button id="testBackendBtn" class="secondary">Test backend connection</button>
+        </div>
+        <p class="hint">The tables below show only the weakest 20 trainees and 30 questions. Both downloads contain <strong>every</strong> row, not just what is on screen.</p>
+        <div id="dashboardStatus" class="feedback empty">Click <strong>Load instructor dashboard</strong> after trainees submit.</div>
+        <div id="teacherDashboard" class="dashboard-output"></div>
+      </section>
+
+      <section class="panel dashboard-panel" id="intakePanelSection" hidden>
+        <h2>Intake management (admin)</h2>
+        <p class="hint">Intakes hold groups, groups hold trainees. Trainees create their own login using the EnergyTech ID listed here.</p>
+
+        <div class="roster-toolbar">
+          <button id="loadRosterBtn" class="secondary" type="button">Load intakes</button>
+          <span class="roster-new">
+            <input id="newIntakeLabel" placeholder="New intake label, e.g. JAN26" maxlength="30" />
+            <button id="addIntakeBtn" type="button">Add intake</button>
+          </span>
+        </div>
+        <div id="rosterStatusLine" class="feedback empty">Click <strong>Load intakes</strong> to see the intakes, groups and trainees on record.</div>
+        <div id="rosterOutput" class="dashboard-output"></div>
+
+        <div id="traineeManager" class="roster-trainees" hidden>
+          <h3 id="traineeManagerTitle">Trainees</h3>
+          <div class="grid student-grid">
+            <label>EnergyTech ID <input id="newTraineeId" placeholder="e.g. ET12345" /></label>
+            <label>Family name <input id="newTraineeFamily" placeholder="Al-Otaibi" /></label>
+            <label>Given name <input id="newTraineeGiven" placeholder="Mohammed Abdullah Saleh" /></label>
+          </div>
+          <div class="button-row">
+            <button id="addTraineeBtn" type="button">Add trainee</button>
+            <button id="importCsvBtn" class="secondary" type="button">Import from CSV…</button>
+            <button id="downloadRosterCsvBtn" class="secondary" type="button">⬇ Download this group (CSV)</button>
+            <button id="closeTraineeManagerBtn" class="secondary" type="button">Close</button>
+          </div>
+          <input id="csvFileInput" type="file" accept=".csv,text/csv" hidden />
+          <div id="csvPreview" class="csv-preview" hidden></div>
+          <div id="traineeManagerStatus" class="feedback empty"></div>
+          <div id="traineeTable" class="dashboard-output"></div>
+        </div>
+      </section>
+
+      <section class="panel dashboard-panel" id="adminPanelSection" hidden>
+        <h2>Instructor accounts (admin)</h2>
+        <p class="hint">Approve colleague sign-up requests and manage access. Only visible to admin accounts.</p>
+        <div class="button-row">
+          <button id="loadInstructorAccountsBtn" class="secondary">Load instructor accounts</button>
+        </div>
+        <div id="instructorAccountsOutput" class="dashboard-output"></div>
+      </section>
+    </section>
+
+    <section id="studentInterface" hidden>
+      <!-- Trainee login. A trainee signs in with the EnergyTech ID that is on
+           their intake list; walk-ins are handled per session further down. -->
+      <section class="panel student-panel" id="traineeLoginPanel">
+        <h2>Trainee login</h2>
+        <div class="grid student-grid">
+          <label>
+            EnergyTech ID
+            <input id="traineeLoginId" autocomplete="username" placeholder="Your EnergyTech ID" />
+          </label>
+          <label>
+            Password
+            <input id="traineeLoginPassword" type="password" autocomplete="current-password" placeholder="Your password" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="traineeLoginBtn">Log in</button>
+          <button id="toggleTraineeSignupBtn" class="secondary" type="button">First time? Create my account</button>
+          <button id="backFromTraineeBtn" class="secondary">Back</button>
+        </div>
+        <div id="traineeLoginStatus" class="feedback empty">Log in with your EnergyTech ID to start a quiz.</div>
+
+        <div id="traineeSignupPanel" class="signup-panel" hidden>
+          <h3>Create my account</h3>
+          <p class="hint">Your EnergyTech ID must already be on your intake list. Choose a password you will remember — your instructor cannot see it.</p>
+          <div class="grid student-grid">
+            <label>
+              EnergyTech ID
+              <input id="traineeSignupId" autocomplete="username" placeholder="Your EnergyTech ID" />
+            </label>
+            <label>
+              Choose a password
+              <input id="traineeSignupPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
+            </label>
+            <label>
+              Confirm password
+              <input id="traineeSignupConfirm" type="password" autocomplete="new-password" placeholder="Repeat password" />
+            </label>
+          </div>
+          <div class="button-row">
+            <button id="traineeSignupBtn" type="button">Create account</button>
+          </div>
+          <div id="traineeSignupStatus" class="feedback empty">Enter your EnergyTech ID and choose a password.</div>
+        </div>
+
+        <div id="walkInPanel" class="signup-panel" hidden>
+          <h3>Sitting a quiz without an account</h3>
+          <p class="hint">Only for sessions where your instructor has allowed it. Your result is recorded as unregistered.</p>
+          <div class="grid student-grid">
+            <label>Session code <input id="walkInCode" placeholder="e.g. G1-4826" /></label>
+            <label>Name <input id="walkInName" autocomplete="name" /></label>
+            <label>Group <input id="walkInGroup" /></label>
+            <label>EnergyTech ID <input id="walkInId" /></label>
+          </div>
+          <div class="button-row">
+            <button id="walkInStartBtn" type="button">Check session and start</button>
+          </div>
+          <div id="walkInStatus" class="feedback empty">Enter the session code your instructor gave you.</div>
+        </div>
+        <div class="button-row">
+          <button id="toggleWalkInBtn" class="secondary" type="button">No account? Sitting as a guest</button>
+        </div>
+      </section>
+
+      <!-- Signed-in trainee: profile, then the session code. -->
+      <section class="panel student-panel" id="traineeHomePanel" hidden>
+        <div class="account-bar">
+          <div id="traineeAccountBar">Logged in.</div>
+          <button id="traineeLogoutBtn" class="secondary" type="button">Log out</button>
+        </div>
+        <div id="traineeProfile" class="trainee-profile"></div>
+        <div class="grid student-grid">
+          <label>Session code <input id="studentSessionCode" placeholder="e.g. G1-4826" /></label>
+        </div>
+        <div class="button-row">
+          <button id="loadTraineeSessionBtn">Load session and start quiz</button>
+          <button id="traineeChangePasswordToggle" class="secondary" type="button">Change my password</button>
+          <button id="backFromTraineeHomeBtn" class="secondary">Back</button>
+        </div>
+        <div id="studentStatus" class="feedback empty">Enter the session code from your instructor.</div>
+
+        <div id="traineePasswordPanel" class="signup-panel" hidden>
+          <h3>Change my password</h3>
+          <div class="grid student-grid">
+            <label>Current password <input id="traineeOldPassword" type="password" autocomplete="current-password" /></label>
+            <label>New password <input id="traineeNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" /></label>
+          </div>
+          <div class="button-row">
+            <button id="traineeChangePasswordBtn" type="button">Change password</button>
+          </div>
+          <div id="traineePasswordStatus" class="feedback empty"></div>
+        </div>
+      </section>
+
+      <section id="studentQuizArea" hidden>
+        <section id="studentQuizSummary" class="quiz-summary" aria-live="polite"></section>
+        <section id="studentQuizContainer" class="quiz-container"></section>
+
+        <section class="panel result-panel" id="studentResultPanel">
+          <h2>Submit answers</h2>
+          <div class="button-row">
+            <button id="studentSubmitBtn">Submit answers</button>
+            <button id="studentClearBtn" class="secondary">Clear answers</button>
+            <button id="studentDownloadResultBtn" class="secondary">Download result</button>
+          </div>
+          <div id="studentFeedback" class="feedback empty">Answer all questions. The submit button will not accept incomplete work.</div>
+        </section>
+      </section>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>EnergyTech Mathematics Quiz App — Prepared by Mr. Adnane Khalifa, Mathematics Instructor.</p>
+  </footer>
+
+  <script src="question_bank.js"></script>
+  <script src="question_bank_ch03.js"></script>
+  <script src="explanation_links.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

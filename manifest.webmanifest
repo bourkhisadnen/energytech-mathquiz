@@ -1,0 +1,15 @@
+{
+  "name": "EnergyTech Mathematics Quiz App",
+  "short_name": "EnergyTech Quiz",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#006fae",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
