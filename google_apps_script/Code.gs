@@ -144,6 +144,8 @@ function doGet(e) {
       data = traineeSave_(params);
     } else if (params.action === 'trainee_delete') {
       data = traineeDelete_(params);
+    } else if (params.action === 'trainee_move') {
+      data = traineeMove_(params);
     } else if (params.action === 'trainee_set_account') {
       data = traineeSetAccount_(params);
     } else if (params.action === 'trainee_signup') {
@@ -253,10 +255,10 @@ function authSignup_(params) {
 
   const salt = makeSalt_();
   const now = new Date();
-  sheet.appendRow([
+  appendTextRow_(sheet, [
     now, username, displayName, hashPassword_(password, salt), salt,
     'instructor', 'pending', now, '', '', '', ''
-  ]);
+  ], [2, 3]);
   return { ok: true, status: 'pending', message: 'Account requested. An admin must approve it before you can log in.' };
 }
 
@@ -414,6 +416,39 @@ function adminSetRole_(params) {
  * setup(), so resetting quiz results cannot wipe a roster.
  * ===================================================================== */
 
+/* Google Sheets converts anything that looks like a date or a number as it is
+ * written: an intake labelled MAY26 comes back as 26 May 2026, and an all-digit
+ * trainee ID silently loses its leading zeros. Formatting the target cells as
+ * plain text is what prevents it, and it has to happen BEFORE the write --
+ * reformatting afterwards only changes how the already-converted value is
+ * displayed, it does not give the original text back.
+ *
+ * textCols are 1-based column numbers that must stay verbatim. */
+function writeRow_(sheet, row, values, textCols) {
+  (textCols || []).forEach(c => sheet.getRange(row, c).setNumberFormat('@'));
+  sheet.getRange(row, 1, 1, values.length).setValues([values]);
+  return row;
+}
+
+function appendTextRow_(sheet, values, textCols) {
+  return writeRow_(sheet, sheet.getLastRow() + 1, values, textCols);
+}
+
+function writeRows_(sheet, startRow, rows, textCols) {
+  if (!rows.length) return;
+  (textCols || []).forEach(c => sheet.getRange(startRow, c, rows.length, 1).setNumberFormat('@'));
+  sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(rows);
+}
+
+function setTextCell_(sheet, row, col, value) {
+  sheet.getRange(row, col).setNumberFormat('@').setValue(value);
+}
+
+function setTextBlock_(sheet, row, col, values) {
+  sheet.getRange(row, col, 1, values.length).setNumberFormat('@');
+  sheet.getRange(row, col, 1, values.length).setValues([values]);
+}
+
 function ensureHeaders_(sheet, headers) {
   // Append any header this version expects but the sheet does not have yet,
   // so an existing spreadsheet gains new columns without losing its rows.
@@ -428,6 +463,8 @@ function ensureHeaders_(sheet, headers) {
   }
   sheet.setFrozenRows(1);
 }
+
+const GROUP_NAME_RE = /^G([1-9]|1[0-9]|20)$/;
 
 const INTAKE_HEADERS  = ['Timestamp', 'Label', 'Status', 'Created By'];
 const GROUP_HEADERS   = ['Timestamp', 'Intake', 'Group', 'Created By'];
@@ -538,15 +575,15 @@ function intakeSave_(params) {
     let found = -1;
     rows.forEach((r, i) => { if (normLabel_(r[1]) === previous) found = i + 2; });
     if (found === -1) return { ok: false, error: 'Intake not found.' };
-    sheet.getRange(found, 2).setValue(label);
+    setTextCell_(sheet, found, 2, label);
     const g = groupsSheet_();
-    rowsOf_(g).forEach((r, i) => { if (normLabel_(r[1]) === previous) g.getRange(i + 2, 2).setValue(label); });
+    rowsOf_(g).forEach((r, i) => { if (normLabel_(r[1]) === previous) setTextCell_(g, i + 2, 2, label); });
     const t = traineesSheet_();
-    rowsOf_(t).forEach((r, i) => { if (normLabel_(r[4]) === previous) t.getRange(i + 2, 5).setValue(label); });
+    rowsOf_(t).forEach((r, i) => { if (normLabel_(r[4]) === previous) setTextCell_(t, i + 2, 5, label); });
     return { ok: true, label: label, renamedFrom: previous };
   }
 
-  sheet.appendRow([new Date(), label, 'active', auth.instructor.username]);
+  appendTextRow_(sheet, [new Date(), label, 'active', auth.instructor.username], [2]);
   return { ok: true, label: label };
 }
 
@@ -580,7 +617,7 @@ function groupSave_(params) {
   if (!rowsOf_(intakesSheet_()).some(r => normLabel_(r[1]) === intake)) {
     return { ok: false, error: 'Intake ' + intake + ' does not exist.' };
   }
-  if (!/^G([1-9]|1[0-9]|20)$/.test(name)) {
+  if (!GROUP_NAME_RE.test(name)) {
     return { ok: false, error: 'Group name must be G1 to G20.' };
   }
   const sheet = groupsSheet_();
@@ -592,14 +629,14 @@ function groupSave_(params) {
     let found = -1;
     rows.forEach((r, i) => { if (normLabel_(r[1]) === intake && normLabel_(r[2]) === previous) found = i + 2; });
     if (found === -1) return { ok: false, error: 'Group not found.' };
-    sheet.getRange(found, 3).setValue(name);
+    setTextCell_(sheet, found, 3, name);
     const t = traineesSheet_();
     rowsOf_(t).forEach((r, i) => {
-      if (normLabel_(r[4]) === intake && normLabel_(r[5]) === previous) t.getRange(i + 2, 6).setValue(name);
+      if (normLabel_(r[4]) === intake && normLabel_(r[5]) === previous) setTextCell_(t, i + 2, 6, name);
     });
     return { ok: true, intake: intake, name: name, renamedFrom: previous };
   }
-  sheet.appendRow([new Date(), intake, name, auth.instructor.username]);
+  appendTextRow_(sheet, [new Date(), intake, name, auth.instructor.username], [2, 3]);
   return { ok: true, intake: intake, name: name };
 }
 
@@ -657,11 +694,11 @@ function traineeSave_(params) {
   if (previousId) {
     const target = findTraineeRow_(sheet, previousId);
     if (!target) return { ok: false, error: 'Trainee not found.' };
-    sheet.getRange(target.rowNumber, 2, 1, 5).setValues([[id, family, given, intake, group]]);
+    setTextBlock_(sheet, target.rowNumber, 2, [id, family, given, intake, group]);
     return { ok: true, energytechId: id, updated: true };
   }
-  sheet.appendRow([new Date(), id, family, given, intake, group, 'none', '', '', '', '',
-                   auth.instructor.username]);
+  appendTextRow_(sheet, [new Date(), id, family, given, intake, group, 'none', '', '', '', '',
+                         auth.instructor.username], [2, 3, 4, 5, 6]);
   return { ok: true, energytechId: id };
 }
 
@@ -702,33 +739,97 @@ function traineeSetAccount_(params) {
   return { ok: true, energytechId: id, status: status };
 }
 
+/* Imports a whole intake in one file. Each row may name its own group, so the
+ * registry's single list for the intake goes in as-is instead of being split
+ * into twenty per-group files; any group named in the file that does not exist
+ * yet is created. A payload-level `group` still works, which is what a
+ * per-group import sends. */
 function traineeImport_(payload) {
   const auth = requireAdmin_({ token: payload.token });
   if (!auth.ok) return auth;
+
   const intake = normLabel_(payload.intake);
-  const group = normLabel_(payload.group);
-  if (!rowsOf_(groupsSheet_()).some(r => normLabel_(r[1]) === intake && normLabel_(r[2]) === group)) {
-    return { ok: false, error: 'Group ' + group + ' does not exist in intake ' + intake + '.' };
+  if (!rowsOf_(intakesSheet_()).some(r => normLabel_(r[1]) === intake)) {
+    return { ok: false, error: 'Intake ' + intake + ' does not exist.' };
   }
+  const fallbackGroup = normLabel_(payload.group);
+  const rows = payload.rows || [];
+
+  const groupsSheet = groupsSheet_();
+  const known = {};
+  rowsOf_(groupsSheet).forEach(r => { if (normLabel_(r[1]) === intake) known[normLabel_(r[2])] = true; });
+
+  // Validate every group the file asks for before creating any of them, so a
+  // typo does not leave half the groups made and the rest refused.
+  const wanted = [];
+  const badNames = [];
+  rows.forEach(t => {
+    const g = normLabel_(t.group) || fallbackGroup;
+    if (!g) return;
+    if (!GROUP_NAME_RE.test(g)) {
+      if (badNames.indexOf(g) === -1) badNames.push(g);
+    } else if (wanted.indexOf(g) === -1) {
+      wanted.push(g);
+    }
+  });
+  if (badNames.length) {
+    return { ok: false, error: 'These group names are not between G1 and G20: ' + badNames.join(', ') + '.' };
+  }
+
+  const created = [];
+  wanted.forEach(g => {
+    if (!known[g]) {
+      appendTextRow_(groupsSheet, [new Date(), intake, g, auth.instructor.username], [2, 3]);
+      known[g] = true;
+      created.push(g);
+    }
+  });
+
   const sheet = traineesSheet_();
   const seen = {};
   rowsOf_(sheet).forEach(r => { seen[normId_(r[1])] = true; });
 
-  const rows = payload.rows || [];
   const toAdd = [];
   let skipped = 0;
+  let ungrouped = 0;
   const now = new Date();
   rows.forEach(t => {
     const id = normId_(t.energytechId);
+    const g = normLabel_(t.group) || fallbackGroup;
     if (!id || seen[id]) { skipped++; return; }
+    if (!g) { ungrouped++; return; }
     seen[id] = true;
     toAdd.push([now, id, String(t.familyName || '').trim(), String(t.givenName || '').trim(),
-                intake, group, 'none', '', '', '', '', auth.instructor.username]);
+                intake, g, 'none', '', '', '', '', auth.instructor.username]);
   });
-  if (toAdd.length) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, toAdd.length, TRAINEE_HEADERS.length).setValues(toAdd);
+  if (toAdd.length) writeRows_(sheet, sheet.getLastRow() + 1, toAdd, [2, 3, 4, 5, 6]);
+
+  return { ok: true, added: toAdd.length, skipped: skipped, ungrouped: ungrouped, groupsCreated: created };
+}
+
+/* Moving trainees is its own action: doing it through trainee_save would need
+ * one round trip per person and would rewrite names that are not changing. */
+function traineeMove_(params) {
+  const auth = requireAdmin_(params);
+  if (!auth.ok) return auth;
+  const intake = normLabel_(params.intake);
+  const group = normLabel_(params.group);
+  if (!rowsOf_(groupsSheet_()).some(r => normLabel_(r[1]) === intake && normLabel_(r[2]) === group)) {
+    return { ok: false, error: 'Group ' + group + ' does not exist in intake ' + intake + '.' };
   }
-  return { ok: true, added: toAdd.length, skipped: skipped };
+  const ids = String(params.ids || '').split(',').map(normId_).filter(function (x) { return x; });
+  if (!ids.length) return { ok: false, error: 'No trainees were chosen.' };
+
+  const sheet = traineesSheet_();
+  const missing = [];
+  let moved = 0;
+  ids.forEach(id => {
+    const found = findTraineeRow_(sheet, id);
+    if (!found) { missing.push(id); return; }
+    setTextBlock_(sheet, found.rowNumber, 5, [intake, group]);
+    moved++;
+  });
+  return { ok: true, moved: moved, missing: missing, intake: intake, group: group };
 }
 
 
@@ -856,7 +957,7 @@ function saveSession_(s, owner) {
   const code = String(s.sessionCode || '').toUpperCase();
   if (!code) throw new Error('Missing session code.');
 
-  sheet.appendRow([
+  appendTextRow_(sheet, [
     timestamp,
     code,
     s.sessionName || '',
@@ -873,7 +974,7 @@ function saveSession_(s, owner) {
     (owner && owner.displayName) || '',
     s.intake || '',
     s.allowWalkIn === true
-  ]);
+  ], [2, 3, 4, 15]);
 }
 
 function getSession_(code) {
@@ -965,7 +1066,7 @@ function saveAttempt_(p) {
     }
   }
 
-  attempts.appendRow([
+  appendTextRow_(attempts, [
     timestamp,
     attemptId,
     identity.name,
@@ -989,7 +1090,7 @@ function saveAttempt_(p) {
     owner.displayName,
     identity.intake,
     identity.registered
-  ]);
+  ], [3, 4, 5, 6, 22]);
 
   const rows = (p.items || []).map(item => [
     timestamp,
@@ -1014,7 +1115,7 @@ function saveAttempt_(p) {
   ]);
 
   if (rows.length) {
-    items.getRange(items.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+    writeRows_(items, items.getLastRow() + 1, rows, [3, 4, 5]);
   }
 }
 

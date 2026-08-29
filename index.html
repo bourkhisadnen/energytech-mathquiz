@@ -232,36 +232,95 @@
       </section>
 
       <section class="panel dashboard-panel" id="intakePanelSection" hidden>
-        <h2>Intake management (admin)</h2>
-        <p class="hint">Intakes hold groups, groups hold trainees. Trainees create their own login using the EnergyTech ID listed here.</p>
+        <h2>Intakes, groups and trainees</h2>
+        <p class="hint">Pick an intake, then a group, to see and edit its trainees. Trainees sign in with the EnergyTech ID listed here.</p>
 
         <div class="roster-toolbar">
-          <button id="loadRosterBtn" class="secondary" type="button">Load intakes</button>
-          <span class="roster-new">
-            <input id="newIntakeLabel" placeholder="New intake label, e.g. JAN26" maxlength="30" />
-            <button id="addIntakeBtn" type="button">Add intake</button>
-          </span>
+          <label class="roster-search">
+            <span class="visually-hidden">Search every trainee</span>
+            <input id="rosterSearch" type="search" placeholder="Search all trainees by name or EnergyTech ID" autocomplete="off" />
+          </label>
+          <button id="loadRosterBtn" class="secondary" type="button">Refresh</button>
         </div>
-        <div id="rosterStatusLine" class="feedback empty">Click <strong>Load intakes</strong> to see the intakes, groups and trainees on record.</div>
-        <div id="rosterOutput" class="dashboard-output"></div>
+        <div id="rosterStatusLine" class="feedback empty" hidden></div>
 
-        <div id="traineeManager" class="roster-trainees" hidden>
-          <h3 id="traineeManagerTitle">Trainees</h3>
-          <div class="grid student-grid">
-            <label>EnergyTech ID <input id="newTraineeId" placeholder="e.g. ET12345" /></label>
-            <label>Family name <input id="newTraineeFamily" placeholder="Al-Otaibi" /></label>
-            <label>Given name <input id="newTraineeGiven" placeholder="Mohammed Abdullah Saleh" /></label>
-          </div>
-          <div class="button-row">
-            <button id="addTraineeBtn" type="button">Add trainee</button>
-            <button id="importCsvBtn" class="secondary" type="button">Import from CSV…</button>
-            <button id="downloadRosterCsvBtn" class="secondary" type="button">⬇ Download this group (CSV)</button>
-            <button id="closeTraineeManagerBtn" class="secondary" type="button">Close</button>
-          </div>
-          <input id="csvFileInput" type="file" accept=".csv,text/csv" hidden />
-          <div id="csvPreview" class="csv-preview" hidden></div>
-          <div id="traineeManagerStatus" class="feedback empty"></div>
-          <div id="traineeTable" class="dashboard-output"></div>
+        <div class="roster-workspace" id="rosterWorkspace">
+
+          <section class="roster-pane" id="paneIntakes" aria-label="Intakes">
+            <header class="pane-head">
+              <h3>Intakes</h3>
+              <button type="button" class="pane-add" id="showAddIntake" title="Add an intake">+ New</button>
+            </header>
+            <form class="pane-form" id="addIntakeForm" hidden>
+              <input id="newIntakeLabel" placeholder="e.g. JAN26" maxlength="30" autocomplete="off" />
+              <div class="pane-form-actions">
+                <button type="submit" id="addIntakeBtn">Add</button>
+                <button type="button" class="secondary" id="cancelAddIntake">Cancel</button>
+              </div>
+            </form>
+            <div class="pane-body" id="intakeList"></div>
+          </section>
+
+          <section class="roster-pane" id="paneGroups" aria-label="Groups">
+            <header class="pane-head">
+              <h3 id="groupPaneTitle">Groups</h3>
+              <button type="button" class="pane-add" id="showAddGroup" title="Add a group" hidden>+ New</button>
+            </header>
+            <form class="pane-form" id="addGroupForm" hidden>
+              <input id="newGroupName" placeholder="G1" maxlength="3" autocomplete="off" />
+              <div class="pane-form-actions">
+                <button type="submit" id="addGroupBtn">Add</button>
+                <button type="button" class="secondary" id="cancelAddGroup">Cancel</button>
+              </div>
+            </form>
+            <div class="pane-body" id="groupList"></div>
+          </section>
+
+          <section class="roster-pane roster-pane-wide" id="paneTrainees" aria-label="Trainees">
+            <header class="pane-head">
+              <h3 id="traineePaneTitle">Trainees</h3>
+              <div class="pane-head-actions" id="traineePaneActions" hidden>
+                <button type="button" class="pane-add" id="showAddTrainee">+ Add</button>
+                <button type="button" class="secondary" id="importCsvBtn">Import CSV</button>
+                <button type="button" class="secondary" id="downloadRosterCsvBtn" title="Download this group">&#8595; CSV</button>
+              </div>
+            </header>
+
+            <div class="filter-row" id="traineeFilters" hidden>
+              <button type="button" class="filter-chip is-on" data-filter="all">All</button>
+              <button type="button" class="filter-chip" data-filter="none">No login yet</button>
+              <button type="button" class="filter-chip" data-filter="active">Has a login</button>
+              <button type="button" class="filter-chip" data-filter="revoked">Revoked</button>
+            </div>
+
+            <form class="pane-form pane-form-wide" id="addTraineeForm" hidden>
+              <div class="grid trainee-fields">
+                <label>EnergyTech ID <input id="newTraineeId" placeholder="ET12345" autocomplete="off" /></label>
+                <label>Family name <input id="newTraineeFamily" placeholder="Al-Otaibi" autocomplete="off" /></label>
+                <label>Given name <input id="newTraineeGiven" placeholder="Mohammed Abdullah Saleh" autocomplete="off" /></label>
+              </div>
+              <div class="pane-form-actions">
+                <button type="submit" id="addTraineeBtn">Add trainee</button>
+                <button type="button" class="secondary" id="cancelAddTrainee">Cancel</button>
+              </div>
+            </form>
+
+            <div class="bulk-bar" id="bulkBar" hidden>
+              <span id="bulkCount">0 selected</span>
+              <span class="bulk-actions">
+                <select id="bulkMoveTarget" aria-label="Move selected trainees to"></select>
+                <button type="button" id="bulkMoveBtn">Move</button>
+                <button type="button" class="secondary" id="bulkRevokeBtn">Revoke login</button>
+                <button type="button" class="secondary" id="bulkClearBtn">Clear</button>
+              </span>
+            </div>
+
+            <input id="csvFileInput" type="file" accept=".csv,text/csv" hidden />
+            <div id="csvPreview" class="csv-preview" hidden></div>
+            <div id="traineeManagerStatus" class="feedback empty" hidden></div>
+            <div class="pane-body" id="traineeList"></div>
+          </section>
+
         </div>
       </section>
 

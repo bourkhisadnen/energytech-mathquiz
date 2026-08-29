@@ -302,49 +302,64 @@ sit a session if the instructor allowed it when creating that session.
 An **intake** (for example `JAN26`) holds **groups** (`G1` to `G20`), and each group holds
 **trainees**. A group must belong to an intake, and a trainee must belong to a group.
 
-### For admins — Intake management panel
+### For admins — the roster workspace
 
-The panel appears in Instructor Mode for admin accounts only. Press **Load intakes** to see
-what is on record; each intake shows how many groups and trainees it has, and how many of
-those trainees have created a login.
+Three panes, left to right: **Intakes → Groups → Trainees**. Click an intake to see its
+groups, click a group to see its trainees beside it. The list you are working on is always
+next to what you clicked, never below the fold. Everything loads by itself when you open
+Instructor Mode; **Refresh** re-reads it if someone else has been editing.
 
-- **Add intake** — type a label (2–30 characters: letters, numbers, space, dash,
-  underscore) and press the button. Labels are stored in upper case and must be unique.
-- **Rename** — an intake or group rename cascades: the groups and trainees underneath
-  follow it automatically, so no rows are orphaned.
-- **Delete** — refused while anything still hangs off it, and the message says exactly how
-  many groups or trainees are in the way. Empty out the level below first.
-- **Trainees** — opens one group. From there you can add a trainee by hand, edit a name,
-  revoke or restore a login, delete a trainee, import a CSV, or download the group.
+Each intake and group shows its counts, and how many trainees still have **no login** — the
+number you chase at the start of a term.
+
+- **+ New** in a pane adds an intake, a group, or a trainee. Adding an intake selects it and
+  moves you to the Groups pane; adding a group opens its (empty) trainee list. The
+  add-a-trainee form stays open and clears itself, so a run of them can be typed one after
+  another.
+- **Rename / Delete** appear on whichever intake or group is selected, so they are not
+  sitting next to every row waiting to be mis-clicked. A rename cascades to everything
+  underneath it. A delete is refused while anything still hangs off it, and says how many
+  are in the way.
+- **Search** at the top finds any trainee, in any intake, by name or EnergyTech ID, and
+  tells you which group they are in.
+- **Filter chips** above the list — All, No login yet, Has a login, Revoked — each with a
+  live count.
+- **Tick trainees** to get a bar offering **Move to <group>**, **Revoke login**, or Clear.
+  Moving is how people change group mid-term; it keeps their names, their account and their
+  results.
+- **Edit** turns a row into an editor in place, including a Group dropdown, so nothing is
+  done through browser pop-up boxes.
 
 Deleting a trainee is refused once they have submitted an attempt, because their results
-would lose their owner. Revoke their login instead — the row and the results stay, and the
-trainee can no longer sign in.
+would lose their owner. Revoke their login instead — the row and the results stay, and they
+can no longer sign in.
 
-### CSV import
+### CSV import — one file for the whole intake
 
-Open the group you want to import into, then press **Import from CSV…**. The file needs
-three columns in this order:
+Select the intake, press **Import CSV**, and give it one file for everyone. Four columns:
 
 ```
-EnergyTech ID, Family name, Given name
-ET1002,Al-Qahtani,Fahad Abdulrahman Nasser Al Qahtani
-ET1003,Al-Ghamdi,"Turki Saad, junior"
+EnergyTech ID, Family name, Given name, Group
+ET1002,Al-Qahtani,Fahad Abdulrahman Nasser Al Qahtani,G1
+ET1003,Al-Ghamdi,"Turki Saad, junior",G2
+ET1004,Al-Harbi,Omar Khalid,G3
 ```
 
+- **Any group named in the file that does not exist yet is created**, so a new intake can be
+  built from a single import rather than twenty.
 - A header row is detected and skipped; you can also leave it out.
 - Commas, semicolons and tabs all work as separators.
-- Given names are read to the end of the line, so the long multi-part names that include
-  the father's and grandfather's names come through whole. A name containing a comma just
-  needs quotes around it, as in the second row above.
-- Nothing is written until you press the confirm button. The preview says how many rows are
-  new, which IDs are already on record anywhere in the system (skipped), which are repeated
-  inside the file, and which lines could not be read and why.
-- IDs are stored in upper case, and an ID already on record is never overwritten by an
-  import.
+- The Group column is optional. Leave it off and open a group first, and everyone goes into
+  that group — the old per-group behaviour.
+- Given names are read to the end of the line, so the long multi-part names that include the
+  father's and grandfather's names come through whole. A name containing a comma just needs
+  quotes around it.
+- Nothing is written until you confirm. The preview shows the count per group, which groups
+  will be created, which IDs are already on record anywhere in the system, which are
+  repeated inside the file, and which lines could not be read and why.
+- A group name outside G1–G20 stops the whole import rather than half-applying it.
 
-**⬇ Download this group (CSV)** writes the open group back out, including each trainee's
-account state.
+**↓ CSV** downloads the open group, including each trainee's group and account state.
 
 ### For trainees — accounts
 

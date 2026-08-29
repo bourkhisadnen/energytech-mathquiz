@@ -2312,7 +2312,6 @@ let traineeToken = null;
 let traineeProfile = null;     // { energytechId, familyName, givenName, intake, group }
 let walkInIdentity = null;     // { name, group, energytechId } for a guest sitting
 let rosterCache = null;        // { intakes: [], groups: [] }
-let rosterContext = { intake: '', group: '' };   // group open in the trainee manager
 let pendingImport = null;      // rows waiting for the instructor to confirm
 
 /* ---------------- shared backend call ---------------- */
@@ -2502,24 +2501,56 @@ async function traineeChangePassword() {
     if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(err.message || String(err)); }
   }
 }
+/* ==========================================================================
+ * Admin roster workspace
+ *
+ * Three panes, drilled through left to right: intakes -> groups -> trainees.
+ * The trainee list sits beside the group you clicked rather than far below it,
+ * which is what made the old layout impossible to find your way around.
+ * ========================================================================== */
 
-/* ---------------- admin: intakes and groups ---------------- */
+let rosterSel = { intake: '', group: '' };   // what is currently drilled into
+let traineeCache = [];                       // trainees of the open group
+let traineeFilter = 'all';
+let selectedIds = new Set();                 // for bulk move / revoke
+let searchTerm = '';
+let allTrainees = null;                      // every trainee, for the search box
+let editingId = '';                          // trainee row open for editing
 
-function rosterStatus(msg, kind = 'empty') {
-  const el = $('traineeManagerStatus');
-  if (el) { el.className = `feedback ${kind}`; el.innerHTML = msg; }
-}
+/* ---------------- status lines ---------------- */
 
-/* The status line sits above the roster, in its own element: writing it into
- * rosterOutput wiped the intake list that had just been rendered there. */
-function rosterTopStatus(msg, kind = 'empty') {
+function rosterTopStatus(msg, kind) {
   const el = $('rosterStatusLine');
-  if (el) { el.className = `feedback ${kind}`; el.innerHTML = msg; }
+  if (!el) return;
+  if (!msg) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  el.className = `feedback ${kind || 'empty'}`;
+  el.innerHTML = msg;
 }
+
+function rosterStatus(msg, kind) {
+  const el = $('traineeManagerStatus');
+  if (!el) return;
+  if (!msg) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  el.className = `feedback ${kind || 'empty'}`;
+  el.innerHTML = msg;
+}
+
+/* A message that clears itself, so the panel does not keep showing what
+ * happened several actions ago. Errors stay until the next action. */
+let flashTimer = null;
+function rosterFlash(msg, kind) {
+  rosterTopStatus(msg, kind);
+  clearTimeout(flashTimer);
+  if (kind !== 'bad') flashTimer = setTimeout(() => rosterTopStatus(''), 4000);
+}
+
+/* ---------------- loading ---------------- */
 
 async function loadRoster(quiet) {
   if (!isLoggedIn()) return;
-  if (!quiet && isAdmin()) rosterTopStatus('Loading intakes…');
+  if (!quiet) rosterTopStatus('Loading&hellip;');
   try {
     const data = await rosterCall('roster_list', { token: authToken });
     if (!data.ok) {
@@ -2527,71 +2558,293 @@ async function loadRoster(quiet) {
       return;
     }
     rosterCache = { intakes: data.intakes || [], groups: data.groups || [] };
-    if (isAdmin()) renderRoster();
+    if (!quiet) rosterTopStatus('');
+    if (isAdmin()) {
+      // Keep the drill-down pointing somewhere real after a rename or delete.
+      if (rosterSel.intake && !rosterCache.intakes.some(i => i.label === rosterSel.intake)) {
+        rosterSel = { intake: '', group: '' };
+      }
+      if (rosterSel.group && !rosterCache.groups.some(g => g.intake === rosterSel.intake && g.name === rosterSel.group)) {
+        rosterSel.group = '';
+      }
+      renderWorkspace();
+    }
     populateSessionIntakes();
   } catch (err) {
     if (isAdmin()) rosterTopStatus(escapeHtml(err.message || String(err)), 'bad');
   }
 }
 
-/* Any signed-in instructor may read the roster, so the Intake and Group
- * pickers on the session form are filled for everyone -- only editing is
- * admin-only. Failures here are silent: a missing roster must not stop an
- * instructor from creating a session. */
+/* Any signed-in instructor may read the roster, so the Intake and Group pickers
+ * on the session form are filled for everyone -- only editing is admin-only.
+ * Failures are silent here: a missing roster must not block session creation. */
 function loadRosterForSessionPickers() {
   if (!isLoggedIn()) return;
   loadRoster(true).catch(() => {});
 }
 
-function renderRoster() {
-  const out = $('rosterOutput');
-  if (!out || !rosterCache) return;
-  const { intakes, groups } = rosterCache;
+function groupsOf(intake) {
+  return (rosterCache ? rosterCache.groups : [])
+    .filter(g => g.intake === intake)
+    .sort((a, b) => Number(String(a.name).slice(1)) - Number(String(b.name).slice(1)));
+}
+
+/* ---------------- rendering ---------------- */
+
+function renderWorkspace() {
+  renderIntakePane();
+  renderGroupPane();
+  renderTraineePane();
+}
+
+function countLine(groups) {
+  const trainees = groups.reduce((a, g) => a + g.trainees, 0);
+  const logins = groups.reduce((a, g) => a + g.withAccount, 0);
+  const missing = trainees - logins;
+  return `${groups.length} group${groups.length === 1 ? '' : 's'} · ${trainees} trainee${trainees === 1 ? '' : 's'}`
+    + (missing ? `<br><span class="warn-text">${missing} without a login</span>` : '');
+}
+
+function renderIntakePane() {
+  const box = $('intakeList');
+  if (!box) return;
+  const intakes = rosterCache ? rosterCache.intakes : [];
   if (!intakes.length) {
-    out.innerHTML = '<p class="hint">No intakes yet. Add one above — for example <strong>JAN26</strong>.</p>';
+    box.innerHTML = '<p class="pane-empty">No intakes yet.<br><strong>+ New</strong> to add your first one, for example JAN26.</p>';
     return;
   }
-  out.innerHTML = intakes.map(intake => {
-    const mine = groups.filter(g => g.intake === intake.label)
-      .sort((a, b) => Number(a.name.slice(1)) - Number(b.name.slice(1)));
-    const total = mine.reduce((a, g) => a + g.trainees, 0);
-    const accounts = mine.reduce((a, g) => a + g.withAccount, 0);
-    return `
-      <details class="roster-intake" open>
-        <summary class="roster-row">
-          <span class="roster-name">${escapeHtml(intake.label)}</span>
-          <span class="tree-count">${mine.length} group${mine.length === 1 ? '' : 's'} · ${total} trainee${total === 1 ? '' : 's'} · ${accounts} with a login</span>
-          <span class="account-actions">
-            <button type="button" class="secondary intake-rename" data-label="${escapeHtml(intake.label)}">Rename</button>
-            <button type="button" class="secondary intake-delete" data-label="${escapeHtml(intake.label)}">Delete</button>
-          </span>
-        </summary>
-        <div class="roster-groups">
-          ${mine.map(g => `
-            <div class="roster-row roster-group">
-              <span class="roster-name">${escapeHtml(g.name)}</span>
-              <span class="tree-count">${g.trainees} trainee${g.trainees === 1 ? '' : 's'} · ${g.withAccount} with a login</span>
-              <span class="account-actions">
-                <button type="button" class="group-open" data-intake="${escapeHtml(intake.label)}" data-name="${escapeHtml(g.name)}">Trainees</button>
-                <button type="button" class="secondary group-rename" data-intake="${escapeHtml(intake.label)}" data-name="${escapeHtml(g.name)}">Rename</button>
-                <button type="button" class="secondary group-delete" data-intake="${escapeHtml(intake.label)}" data-name="${escapeHtml(g.name)}">Delete</button>
-              </span>
-            </div>`).join('') || '<p class="hint">No groups yet.</p>'}
-          <div class="roster-row roster-add">
-            <input class="new-group-name" data-intake="${escapeHtml(intake.label)}" placeholder="G1" maxlength="3" />
-            <button type="button" class="secondary group-add" data-intake="${escapeHtml(intake.label)}">Add group</button>
-          </div>
-        </div>
-      </details>`;
+  box.innerHTML = intakes.map(i => {
+    const on = i.label === rosterSel.intake;
+    return `<div class="pane-item${on ? ' is-selected' : ''}" data-intake="${escapeHtml(i.label)}" role="button" tabindex="0">
+        <span class="pane-item-main">
+          <span class="pane-item-name">${escapeHtml(i.label)}</span>
+          <span class="pane-item-sub">${countLine(groupsOf(i.label))}</span>
+        </span>
+        ${on ? `<span class="pane-item-actions">
+          <button type="button" class="icon-btn intake-rename" data-label="${escapeHtml(i.label)}" title="Rename ${escapeHtml(i.label)}">Rename</button>
+          <button type="button" class="icon-btn danger intake-delete" data-label="${escapeHtml(i.label)}" title="Delete ${escapeHtml(i.label)}">Delete</button>
+        </span>` : ''}
+      </div>`;
   }).join('');
 }
+
+function renderGroupPane() {
+  const box = $('groupList');
+  const title = $('groupPaneTitle');
+  const add = $('showAddGroup');
+  if (!box) return;
+  if (!rosterSel.intake) {
+    if (title) title.textContent = 'Groups';
+    if (add) add.hidden = true;
+    if ($('addGroupForm')) $('addGroupForm').hidden = true;
+    box.innerHTML = '<p class="pane-empty">Pick an intake to see its groups.</p>';
+    return;
+  }
+  if (title) title.textContent = 'Groups';
+  if (add) add.hidden = false;
+  const groups = groupsOf(rosterSel.intake);
+  if (!groups.length) {
+    box.innerHTML = '<p class="pane-empty">No groups in this intake yet.<br><strong>+ New</strong> to add G1 — or import a CSV with a Group column and they will be made for you.</p>';
+    return;
+  }
+  box.innerHTML = groups.map(g => {
+    const on = g.name === rosterSel.group;
+    const missing = g.trainees - g.withAccount;
+    return `<div class="pane-item${on ? ' is-selected' : ''}" data-group="${escapeHtml(g.name)}" role="button" tabindex="0">
+        <span class="pane-item-main">
+          <span class="pane-item-name">${escapeHtml(g.name)}</span>
+          <span class="pane-item-sub">${g.trainees} trainee${g.trainees === 1 ? '' : 's'}${missing ? `<br><span class="warn-text">${missing} without a login</span>` : ''}</span>
+        </span>
+        ${on ? `<span class="pane-item-actions">
+          <button type="button" class="icon-btn group-rename" data-name="${escapeHtml(g.name)}" title="Rename ${escapeHtml(g.name)}">Rename</button>
+          <button type="button" class="icon-btn danger group-delete" data-name="${escapeHtml(g.name)}" title="Delete ${escapeHtml(g.name)}">Delete</button>
+        </span>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function accountBadge(status) {
+  const label = { active: 'has a login', revoked: 'revoked', none: 'no login yet' }[status] || status;
+  const cls = { active: 'status-approved', revoked: 'status-rejected', none: 'status-pending' }[status] || '';
+  return `<span class="status-badge ${cls}">${label}</span>`;
+}
+
+function visibleTrainees() {
+  let list = traineeCache;
+  if (traineeFilter !== 'all') list = list.filter(t => (t.accountStatus || 'none') === traineeFilter);
+  return list;
+}
+
+function traineeRow(t, opts) {
+  const id = escapeHtml(t.energytechId);
+  if (t.energytechId === editingId) {
+    const groups = groupsOf(rosterSel.intake);
+    return `<tr class="trainee-edit-row"><td colspan="5">
+      <div class="grid trainee-fields">
+        <label>EnergyTech ID <input class="edit-id" value="${id}" /></label>
+        <label>Family name <input class="edit-family" value="${escapeHtml(t.familyName)}" /></label>
+        <label>Given name <input class="edit-given" value="${escapeHtml(t.givenName)}" /></label>
+        <label>Group <select class="edit-group">${groups.map(g =>
+          `<option value="${escapeHtml(g.name)}"${g.name === t.group ? ' selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}</select></label>
+      </div>
+      <div class="pane-form-actions">
+        <button type="button" class="save-trainee" data-id="${id}">Save</button>
+        <button type="button" class="secondary cancel-edit">Cancel</button>
+      </div>
+    </td></tr>`;
+  }
+  const where = opts && opts.showWhere
+    ? `<td class="where">${escapeHtml(t.intake || '')} / ${escapeHtml(t.group || '')}</td>` : '';
+  const box = opts && opts.showWhere ? ''
+    : `<td class="pick"><input type="checkbox" class="pick-trainee" data-id="${id}"${selectedIds.has(t.energytechId) ? ' checked' : ''} aria-label="Select ${id}" /></td>`;
+  return `<tr>
+    ${box}
+    <td class="mono">${id}</td>
+    <td>${escapeHtml(t.familyName)}</td>
+    <td class="given-name">${escapeHtml(t.givenName)}</td>
+    ${where}
+    <td>${accountBadge(t.accountStatus || 'none')}</td>
+    <td class="row-actions">
+      <button type="button" class="icon-btn trainee-edit" data-id="${id}">Edit</button>
+      <button type="button" class="icon-btn danger trainee-delete" data-id="${id}">Delete</button>
+    </td>
+  </tr>`;
+}
+
+function renderTraineePane() {
+  const box = $('traineeList');
+  const title = $('traineePaneTitle');
+  const actions = $('traineePaneActions');
+  const filters = $('traineeFilters');
+  if (!box) return;
+
+  if (searchTerm) {
+    if (title) title.textContent = `Search: “${searchTerm}”`;
+    if (actions) actions.hidden = true;
+    if (filters) filters.hidden = true;
+    if ($('bulkBar')) $('bulkBar').hidden = true;
+    const term = searchTerm.toLowerCase();
+    const hits = (allTrainees || []).filter(t =>
+      `${t.energytechId} ${t.familyName} ${t.givenName}`.toLowerCase().includes(term));
+    box.innerHTML = !allTrainees
+      ? '<p class="pane-empty">Searching&hellip;</p>'
+      : hits.length
+        ? `<div class="table-wrap"><table class="dashboard-table">
+            <thead><tr><th>EnergyTech ID</th><th>Family name</th><th>Given name</th><th>Where</th><th>Account</th><th></th></tr></thead>
+            <tbody>${hits.slice(0, 100).map(t => traineeRow(t, { showWhere: true })).join('')}</tbody></table></div>
+           ${hits.length > 100 ? `<p class="hint">Showing the first 100 of ${hits.length}.</p>` : `<p class="hint">${hits.length} match${hits.length === 1 ? '' : 'es'}.</p>`}`
+        : `<p class="pane-empty">Nobody matches “${escapeHtml(searchTerm)}”.</p>`;
+    return;
+  }
+
+  if (!rosterSel.group) {
+    if (title) title.textContent = 'Trainees';
+    if (actions) actions.hidden = true;
+    if (filters) filters.hidden = true;
+    if ($('bulkBar')) $('bulkBar').hidden = true;
+    box.innerHTML = `<p class="pane-empty">${rosterSel.intake
+      ? 'Pick a group to see its trainees.'
+      : 'Pick an intake, then a group.'}</p>`;
+    return;
+  }
+
+  if (title) title.textContent = `${rosterSel.intake} / ${rosterSel.group}`;
+  if (actions) actions.hidden = false;
+  if (filters) filters.hidden = false;
+
+  const list = visibleTrainees();
+  const counts = {
+    all: traineeCache.length,
+    none: traineeCache.filter(t => (t.accountStatus || 'none') === 'none').length,
+    active: traineeCache.filter(t => t.accountStatus === 'active').length,
+    revoked: traineeCache.filter(t => t.accountStatus === 'revoked').length
+  };
+  document.querySelectorAll('#traineeFilters .filter-chip').forEach(chip => {
+    const key = chip.dataset.filter;
+    chip.classList.toggle('is-on', key === traineeFilter);
+    const base = chip.textContent.replace(/\s*\(\d+\)$/, '');
+    chip.textContent = `${base} (${counts[key] || 0})`;
+  });
+
+  if (!traineeCache.length) {
+    box.innerHTML = '<p class="pane-empty">No trainees in this group yet.<br>Use <strong>+ Add</strong> for one, or <strong>Import CSV</strong> for a whole list.</p>';
+    renderBulkBar();
+    return;
+  }
+  if (!list.length) {
+    box.innerHTML = `<p class="pane-empty">No trainees here match that filter.</p>`;
+    renderBulkBar();
+    return;
+  }
+
+  const allPicked = list.every(t => selectedIds.has(t.energytechId));
+  box.innerHTML = `<div class="table-wrap"><table class="dashboard-table roster-table">
+      <thead><tr>
+        <th class="pick"><input type="checkbox" id="pickAll"${allPicked ? ' checked' : ''} aria-label="Select all shown" /></th>
+        <th>EnergyTech ID</th><th>Family name</th><th>Given name</th><th>Account</th><th></th>
+      </tr></thead>
+      <tbody>${list.map(t => traineeRow(t)).join('')}</tbody></table></div>`;
+  renderBulkBar();
+}
+
+function renderBulkBar() {
+  const bar = $('bulkBar');
+  if (!bar) return;
+  const n = selectedIds.size;
+  bar.hidden = n === 0;
+  if (!n) return;
+  $('bulkCount').textContent = `${n} selected`;
+  const sel = $('bulkMoveTarget');
+  const groups = groupsOf(rosterSel.intake).filter(g => g.name !== rosterSel.group);
+  sel.innerHTML = groups.length
+    ? groups.map(g => `<option value="${escapeHtml(g.name)}">Move to ${escapeHtml(g.name)}</option>`).join('')
+    : '<option value="">no other group</option>';
+  sel.disabled = !groups.length;
+  $('bulkMoveBtn').disabled = !groups.length;
+}
+
+/* ---------------- drilling in ---------------- */
+
+async function selectIntake(label) {
+  rosterSel = { intake: label, group: '' };
+  traineeCache = [];
+  selectedIds.clear();
+  editingId = '';
+  renderWorkspace();
+}
+
+async function selectGroup(name) {
+  rosterSel.group = name;
+  selectedIds.clear();
+  editingId = '';
+  traineeFilter = 'all';
+  renderWorkspace();
+  await refreshTrainees();
+}
+
+async function refreshTrainees() {
+  const { intake, group } = rosterSel;
+  if (!intake || !group) return;
+  try {
+    const data = await rosterCall('trainee_list', { token: authToken, intake, group }, 'energytechTraineeList');
+    if (!data.ok) { rosterStatus(escapeHtml(data.error || 'Could not load trainees.'), 'bad'); return; }
+    traineeCache = data.trainees || [];
+    rosterStatus('');
+    renderTraineePane();
+  } catch (err) {
+    rosterStatus(escapeHtml(err.message || String(err)), 'bad');
+  }
+}
+
+/* ---------------- actions ---------------- */
 
 async function rosterAction(action, params, okMessage) {
   try {
     const data = await rosterCall(action, Object.assign({ token: authToken }, params));
     if (!data.ok) { rosterTopStatus(escapeHtml(data.error || 'That did not work.'), 'bad'); return false; }
     await loadRoster(true);
-    if (okMessage) rosterTopStatus(escapeHtml(okMessage), 'good');
+    allTrainees = null;                       // the search index is now stale
+    if (okMessage) rosterFlash(escapeHtml(okMessage), 'good');
     return true;
   } catch (err) {
     rosterTopStatus(escapeHtml(err.message || String(err)), 'bad');
@@ -2599,76 +2852,14 @@ async function rosterAction(action, params, okMessage) {
   }
 }
 
-/* ---------------- admin: trainees in one group ---------------- */
-
-async function openGroup(intake, group) {
-  rosterContext = { intake, group };
-  if ($('traineeManager')) $('traineeManager').hidden = false;
-  if ($('traineeManagerTitle')) {
-    $('traineeManagerTitle').textContent = `Trainees — ${intake} / ${group}`;
-  }
-  if ($('csvPreview')) { $('csvPreview').hidden = true; $('csvPreview').innerHTML = ''; }
-  pendingImport = null;
-  await refreshTrainees();
-  if ($('traineeManager')) $('traineeManager').scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-async function refreshTrainees() {
-  const { intake, group } = rosterContext;
-  if (!intake || !group) return;
-  rosterStatus('Loading trainees…');
-  try {
-    const data = await rosterCall('trainee_list', { token: authToken, intake, group }, 'energytechTraineeList');
-    if (!data.ok) { rosterStatus(escapeHtml(data.error || 'Could not load trainees.'), 'bad'); return; }
-    renderTrainees(data.trainees || []);
-    rosterStatus(`${(data.trainees || []).length} trainee(s) in ${escapeHtml(intake)} / ${escapeHtml(group)}.`, 'empty');
-  } catch (err) {
-    rosterStatus(escapeHtml(err.message || String(err)), 'bad');
-  }
-}
-
-function accountBadge(status) {
-  const label = { active: 'has a login', revoked: 'revoked', none: 'no account yet' }[status] || status;
-  const cls = { active: 'status-approved', revoked: 'status-rejected', none: 'status-pending' }[status] || '';
-  return `<span class="status-badge ${cls}">${label}</span>`;
-}
-
-function renderTrainees(list) {
-  const out = $('traineeTable');
-  if (!out) return;
-  if (!list.length) {
-    out.innerHTML = '<p class="hint">No trainees in this group yet. Add one above, or import a CSV.</p>';
-    return;
-  }
-  const rows = list.map(t => `
-    <tr>
-      <td>${escapeHtml(t.energytechId)}</td>
-      <td>${escapeHtml(t.familyName)}</td>
-      <td class="given-name">${escapeHtml(t.givenName)}</td>
-      <td>${accountBadge(t.accountStatus)}</td>
-      <td class="account-actions">
-        <button type="button" class="secondary trainee-edit" data-id="${escapeHtml(t.energytechId)}"
-          data-family="${escapeHtml(t.familyName)}" data-given="${escapeHtml(t.givenName)}">Edit</button>
-        ${t.accountStatus === 'active'
-          ? `<button type="button" class="secondary trainee-revoke" data-id="${escapeHtml(t.energytechId)}">Revoke login</button>`
-          : t.accountStatus === 'revoked'
-            ? `<button type="button" class="secondary trainee-restore" data-id="${escapeHtml(t.energytechId)}">Restore</button>`
-            : ''}
-        <button type="button" class="secondary trainee-delete" data-id="${escapeHtml(t.energytechId)}">Delete</button>
-      </td>
-    </tr>`).join('');
-  out.innerHTML = `<div class="table-wrap"><table class="dashboard-table">
-      <thead><tr><th>EnergyTech ID</th><th>Family name</th><th>Given name</th><th>Account</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`;
-}
-
 async function traineeAction(action, params, okMessage) {
   try {
     const data = await rosterCall(action, Object.assign({ token: authToken }, params), 'energytechTraineeAdmin');
     if (!data.ok) { rosterStatus(escapeHtml(data.error || 'That did not work.'), 'bad'); return false; }
+    allTrainees = null;
     await refreshTrainees();
     await loadRoster(true);
-    if (okMessage) rosterStatus(escapeHtml(okMessage), 'good');
+    if (okMessage) rosterFlash(escapeHtml(okMessage), 'good');
     return true;
   } catch (err) {
     rosterStatus(escapeHtml(err.message || String(err)), 'bad');
@@ -2676,7 +2867,24 @@ async function traineeAction(action, params, okMessage) {
   }
 }
 
-/* ---------------- CSV import ---------------- */
+/* ---------------- search across every intake ---------------- */
+
+async function ensureAllTrainees() {
+  if (allTrainees) return;
+  try {
+    const data = await rosterCall('trainee_list', { token: authToken }, 'energytechTraineeAll');
+    allTrainees = data.ok ? (data.trainees || []) : [];
+  } catch { allTrainees = []; }
+  renderTraineePane();
+}
+
+function onSearch(value) {
+  searchTerm = String(value || '').trim();
+  if (searchTerm) { ensureAllTrainees(); }
+  renderTraineePane();
+}
+
+/* ---------------- CSV ---------------- */
 
 /* A small RFC-4180 reader: fields may be quoted, and a quoted field may hold
  * commas, newlines and doubled quotes -- all of which turn up in long
@@ -2704,109 +2912,126 @@ function parseCsv(text) {
   return rows.filter(r => r.some(c => String(c).trim() !== ''));
 }
 
-const HEADER_WORDS = /^(energytech\s*id|id|spsp\s*id|family|family\s*name|surname|last\s*name|given|given\s*name|first\s*name|name)$/i;
+const HEADER_WORDS = /^(energytech\s*id|id|spsp\s*id|family|family\s*name|surname|last\s*name|given|given\s*name|first\s*name|name|group|class|section)$/i;
+const GROUP_RE = /^G([1-9]|1[0-9]|20)$/;
 
+/* Columns are ID, family, given, and optionally group. The group may also be
+ * the last column when the given name is split across several -- so it is
+ * taken from the final cell whenever that cell looks like a group name. */
 function readTraineeCsv(text) {
   const rows = parseCsv(text);
   if (!rows.length) return { rows: [], bad: [], hadHeader: false };
-  let start = 0;
   const first = rows[0].map(c => String(c).trim());
   const hadHeader = first.length >= 2 && first.filter(c => HEADER_WORDS.test(c)).length >= 2;
-  if (hadHeader) start = 1;
   const out = [], bad = [];
-  for (let i = start; i < rows.length; i++) {
+  for (let i = hadHeader ? 1 : 0; i < rows.length; i++) {
     const cells = rows[i].map(c => String(c).trim());
-    const [id, family, given] = [cells[0] || '', cells[1] || '', cells.slice(2).join(', ').trim()];
-    if (!id) { bad.push({ line: i + 1, reason: 'no EnergyTech ID', raw: cells.join(', ') }); continue; }
-    if (!family && !given) { bad.push({ line: i + 1, reason: 'no name', raw: cells.join(', ') }); continue; }
-    out.push({ energytechId: id.toUpperCase(), familyName: family, givenName: given });
+    let group = '';
+    if (cells.length > 3 && GROUP_RE.test(cells[cells.length - 1].toUpperCase())) {
+      group = cells.pop().toUpperCase();
+    }
+    const id = cells[0] || '';
+    const family = cells[1] || '';
+    const given = cells.slice(2).join(', ').trim();
+    if (!id) { bad.push({ line: i + 1, reason: 'no EnergyTech ID' }); continue; }
+    if (!family && !given) { bad.push({ line: i + 1, reason: 'no name' }); continue; }
+    out.push({ energytechId: id.toUpperCase(), familyName: family, givenName: given, group });
   }
   return { rows: out, bad, hadHeader };
 }
 
 async function previewCsv(file) {
-  const { intake, group } = rosterContext;
-  if (!intake || !group) { rosterStatus('Open a group first.', 'warn'); return; }
+  const { intake, group } = rosterSel;
+  if (!intake) { rosterStatus('Pick an intake first.', 'warn'); return; }
   let text;
   try { text = await file.text(); }
-  catch (err) { rosterStatus('Could not read that file.', 'bad'); return; }
+  catch { rosterStatus('Could not read that file.', 'bad'); return; }
 
   const { rows, bad, hadHeader } = readTraineeCsv(text);
   if (!rows.length && !bad.length) { rosterStatus('That file has no rows.', 'warn'); return; }
 
-  // Compare against every trainee already on record, not just this group, so a
-  // duplicate ID sitting in another group is reported rather than silently lost.
-  let existing = new Set();
-  try {
-    const all = await rosterCall('trainee_list', { token: authToken }, 'energytechTraineeAll');
-    if (all.ok) existing = new Set((all.trainees || []).map(t => String(t.energytechId).toUpperCase()));
-  } catch { /* preview still works, the backend re-checks on import */ }
+  // Compare against every trainee on record, not just this group, so an ID
+  // already sitting elsewhere is reported rather than silently skipped.
+  await ensureAllTrainees();
+  const existing = new Set((allTrainees || []).map(t => String(t.energytechId).toUpperCase()));
 
   const seen = new Set();
   const fresh = [], dupInFile = [], already = [];
   rows.forEach(r => {
-    if (seen.has(r.energytechId)) { dupInFile.push(r); return; }
-    seen.add(r.energytechId);
-    if (existing.has(r.energytechId)) already.push(r); else fresh.push(r);
+    const row = Object.assign({}, r, { group: r.group || group });
+    if (seen.has(row.energytechId)) { dupInFile.push(row); return; }
+    seen.add(row.energytechId);
+    if (existing.has(row.energytechId)) already.push(row); else fresh.push(row);
   });
 
-  pendingImport = fresh;
+  const noGroup = fresh.filter(r => !r.group);
+  const byGroup = {};
+  fresh.forEach(r => { if (r.group) byGroup[r.group] = (byGroup[r.group] || 0) + 1; });
+  const knownGroups = new Set(groupsOf(intake).map(g => g.name));
+  const willCreate = Object.keys(byGroup).filter(g => !knownGroups.has(g)).sort();
+
+  pendingImport = fresh.filter(r => r.group);
   const el = $('csvPreview');
   if (!el) return;
   el.hidden = false;
-  const sample = fresh.slice(0, 8).map(r =>
-    `<tr><td>${escapeHtml(r.energytechId)}</td><td>${escapeHtml(r.familyName)}</td><td class="given-name">${escapeHtml(r.givenName)}</td></tr>`).join('');
   el.innerHTML = `
-    <h4>Import preview — ${escapeHtml(intake)} / ${escapeHtml(group)}</h4>
+    <h4>Import into ${escapeHtml(intake)}</h4>
     <ul class="csv-summary">
-      <li><strong>${fresh.length}</strong> new trainee${fresh.length === 1 ? '' : 's'} will be added</li>
+      <li><strong>${pendingImport.length}</strong> new trainee${pendingImport.length === 1 ? '' : 's'} will be added</li>
+      ${Object.keys(byGroup).length
+        ? `<li>By group: ${Object.keys(byGroup).sort().map(g => `${escapeHtml(g)}&nbsp;(${byGroup[g]})`).join(', ')}</li>` : ''}
+      ${willCreate.length ? `<li class="good-text">${willCreate.length} group${willCreate.length === 1 ? '' : 's'} will be created: ${escapeHtml(willCreate.join(', '))}</li>` : ''}
+      ${noGroup.length ? `<li class="bad-line">${noGroup.length} row${noGroup.length === 1 ? '' : 's'} name no group and will be skipped${group ? '' : ' — open a group first, or add a Group column'}</li>` : ''}
       ${already.length ? `<li>${already.length} already on record, skipped: ${escapeHtml(already.slice(0, 6).map(r => r.energytechId).join(', '))}${already.length > 6 ? '…' : ''}</li>` : ''}
       ${dupInFile.length ? `<li>${dupInFile.length} repeated inside the file, skipped</li>` : ''}
       ${bad.length ? `<li class="bad-line">${bad.length} row${bad.length === 1 ? '' : 's'} could not be read: ${escapeHtml(bad.slice(0, 4).map(b => `line ${b.line} (${b.reason})`).join('; '))}</li>` : ''}
       ${hadHeader ? '<li>A header row was detected and ignored.</li>' : ''}
     </ul>
-    ${fresh.length ? `<div class="table-wrap"><table class="dashboard-table">
-      <thead><tr><th>EnergyTech ID</th><th>Family name</th><th>Given name</th></tr></thead>
-      <tbody>${sample}</tbody></table></div>
-      ${fresh.length > 8 ? `<p class="hint">…and ${fresh.length - 8} more.</p>` : ''}` : ''}
+    ${pendingImport.length ? `<div class="table-wrap"><table class="dashboard-table">
+      <thead><tr><th>EnergyTech ID</th><th>Family name</th><th>Given name</th><th>Group</th></tr></thead>
+      <tbody>${pendingImport.slice(0, 8).map(r => `<tr><td class="mono">${escapeHtml(r.energytechId)}</td><td>${escapeHtml(r.familyName)}</td><td class="given-name">${escapeHtml(r.givenName)}</td><td>${escapeHtml(r.group)}</td></tr>`).join('')}</tbody></table></div>
+      ${pendingImport.length > 8 ? `<p class="hint">…and ${pendingImport.length - 8} more.</p>` : ''}` : ''}
     <div class="button-row">
-      <button type="button" id="confirmImportBtn"${fresh.length ? '' : ' disabled'}>Import ${fresh.length} trainee${fresh.length === 1 ? '' : 's'}</button>
+      <button type="button" id="confirmImportBtn"${pendingImport.length ? '' : ' disabled'}>Import ${pendingImport.length} trainee${pendingImport.length === 1 ? '' : 's'}</button>
       <button type="button" id="cancelImportBtn" class="secondary">Cancel</button>
     </div>`;
 }
 
 async function confirmImport() {
-  const { intake, group } = rosterContext;
+  const { intake } = rosterSel;
   if (!pendingImport || !pendingImport.length) return;
   const url = activeWebAppUrl();
   const before = pendingImport.length;
-  rosterStatus(`Importing ${before} trainee(s)…`);
+  const wanted = pendingImport.slice();
+  rosterStatus(`Importing ${before} trainee(s)&hellip;`);
   try {
-    // Sent by POST: a whole group of long names does not fit in a URL. The
-    // response is opaque, so the group is re-read afterwards to report what
+    // Sent by POST: a whole intake of long names does not fit in a URL. The
+    // response is opaque, so the roster is re-read afterwards to report what
     // actually landed.
     await fetch(url, {
       method: 'POST',
       mode: 'no-cors',
-      body: JSON.stringify({ type: 'trainee_import', token: authToken, intake, group, rows: pendingImport })
+      body: JSON.stringify({ type: 'trainee_import', token: authToken, intake, rows: wanted })
     });
     let added = 0;
     for (let attempt = 1; attempt <= 4; attempt++) {
       await new Promise(r => setTimeout(r, 700 * attempt));
-      const check = await rosterCall('trainee_list', { token: authToken, intake, group }, 'energytechImportCheck');
+      const check = await rosterCall('trainee_list', { token: authToken, intake }, 'energytechImportCheck');
       if (check.ok) {
         const ids = new Set((check.trainees || []).map(t => String(t.energytechId).toUpperCase()));
-        added = pendingImport.filter(r => ids.has(r.energytechId)).length;
+        added = wanted.filter(r => ids.has(r.energytechId)).length;
         if (added >= before) break;
       }
     }
     pendingImport = null;
+    allTrainees = null;
     if ($('csvPreview')) { $('csvPreview').hidden = true; $('csvPreview').innerHTML = ''; }
-    await refreshTrainees();
     await loadRoster(true);
-    rosterStatus(added >= before
-      ? `Imported ${added} trainee(s) into ${escapeHtml(intake)} / ${escapeHtml(group)}.`
-      : `Imported ${added} of ${before}. Reload the group to check the rest.`,
+    await refreshTrainees();
+    rosterStatus('');
+    rosterFlash(added >= before
+      ? `Imported ${added} trainee(s) into ${escapeHtml(intake)}.`
+      : `Imported ${added} of ${before}. Press Refresh to check the rest.`,
       added >= before ? 'good' : 'warn');
   } catch (err) {
     rosterStatus(escapeHtml(err.message || String(err)), 'bad');
@@ -2814,12 +3039,11 @@ async function confirmImport() {
 }
 
 function downloadGroupCsv() {
-  const rows = [...document.querySelectorAll('#traineeTable tbody tr')].map(tr =>
-    [...tr.cells].slice(0, 4).map(td => td.textContent.trim()));
-  if (!rows.length) { rosterStatus('Nothing to download — load a group first.', 'warn'); return; }
-  const head = ['EnergyTech ID', 'Family name', 'Given name', 'Account'];
+  if (!traineeCache.length) { rosterStatus('Nothing to download — open a group first.', 'warn'); return; }
+  const head = ['EnergyTech ID', 'Family name', 'Given name', 'Group', 'Account'];
+  const rows = traineeCache.map(t => [t.energytechId, t.familyName, t.givenName, t.group, t.accountStatus || 'none']);
   downloadCsv(csvRows([head].concat(rows)),
-    `trainees_${rosterContext.intake}_${rosterContext.group}_${stamp()}.csv`.replace(/\s+/g, ''));
+    `trainees_${rosterSel.intake}_${rosterSel.group}_${stamp()}.csv`.replace(/\s+/g, ''));
 }
 
 /* ---------------- session intake and group pickers ---------------- */
@@ -2839,14 +3063,11 @@ function populateSessionGroups() {
   const intake = $('sessionIntake') ? $('sessionIntake').value : '';
   if (!sel) return;
   const previous = sel.value;
-  const groups = (rosterCache ? rosterCache.groups : [])
-    .filter(g => g.intake === intake)
-    .sort((a, b) => Number(a.name.slice(1)) - Number(b.name.slice(1)));
+  const groups = groupsOf(intake);
   sel.innerHTML = '<option value="">— none —</option>'
     + groups.map(g => `<option value="${escapeHtml(g.name)}">${escapeHtml(g.name)} (${g.trainees})</option>`).join('');
   sel.value = groups.some(g => g.name === previous) ? previous : '';
 }
-
 /* ---------------- walk-ins ---------------- */
 
 async function startWalkIn() {
@@ -2915,13 +3136,12 @@ function studentIdentity() {
   }
   return { name: '', group: '', energytechId: '', intake: '', token: '' };
 }
-
 /* ---------------- event wiring ---------------- */
 
 function wireRosterUi() {
   loadTraineeFromStorage();
 
-  // Trainee login / signup / walk-in
+  /* --- trainee login / signup / walk-in --- */
   if ($('traineeLoginBtn')) $('traineeLoginBtn').addEventListener('click', traineeLogIn);
   if ($('traineeLoginPassword')) $('traineeLoginPassword').addEventListener('keydown', e => { if (e.key === 'Enter') traineeLogIn(); });
   if ($('traineeLoginId')) $('traineeLoginId').addEventListener('keydown', e => { if (e.key === 'Enter') traineeLogIn(); });
@@ -2938,31 +3158,79 @@ function wireRosterUi() {
   });
   if ($('traineeChangePasswordBtn')) $('traineeChangePasswordBtn').addEventListener('click', traineeChangePassword);
 
-  // Admin: intakes
-  if ($('loadRosterBtn')) $('loadRosterBtn').addEventListener('click', () => loadRoster(false));
-  if ($('addIntakeBtn')) $('addIntakeBtn').addEventListener('click', async () => {
+  /* --- roster: toolbar --- */
+  // Refresh has to reload the open group too, or the counts update while the
+  // list below them still shows what it showed a minute ago.
+  if ($('loadRosterBtn')) $('loadRosterBtn').addEventListener('click', async () => {
+    allTrainees = null;
+    await loadRoster(false);
+    await refreshTrainees();
+  });
+  if ($('rosterSearch')) {
+    let debounce = null;
+    $('rosterSearch').addEventListener('input', e => {
+      const v = e.target.value;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => onSearch(v), 180);
+    });
+  }
+
+  /* --- roster: the three little add forms --- */
+  const toggleForm = (formId, inputId, on) => {
+    const f = $(formId);
+    if (!f) return;
+    f.hidden = !on;
+    if (on && $(inputId)) $(inputId).focus();
+  };
+  if ($('showAddIntake')) $('showAddIntake').addEventListener('click', () => toggleForm('addIntakeForm', 'newIntakeLabel', $('addIntakeForm').hidden));
+  if ($('cancelAddIntake')) $('cancelAddIntake').addEventListener('click', () => toggleForm('addIntakeForm', null, false));
+  if ($('addIntakeForm')) $('addIntakeForm').addEventListener('submit', async e => {
+    e.preventDefault();
     const input = $('newIntakeLabel');
     const label = input ? input.value.trim() : '';
     if (!label) { rosterTopStatus('Type a label for the new intake, for example JAN26.', 'warn'); return; }
-    if (await rosterAction('intake_save', { label }, `Intake ${label} added.`) && input) input.value = '';
+    if (await rosterAction('intake_save', { label }, `Intake ${label.toUpperCase()} added.`)) {
+      if (input) input.value = '';
+      toggleForm('addIntakeForm', null, false);
+      selectIntake(label.toUpperCase());
+    }
   });
 
-  // Admin: trainees
-  if ($('addTraineeBtn')) $('addTraineeBtn').addEventListener('click', async () => {
-    const { intake, group } = rosterContext;
-    if (!intake || !group) { rosterStatus('Open a group first.', 'warn'); return; }
-    const id = $('newTraineeId') ? $('newTraineeId').value.trim() : '';
-    const family = $('newTraineeFamily') ? $('newTraineeFamily').value.trim() : '';
-    const given = $('newTraineeGiven') ? $('newTraineeGiven').value.trim() : '';
+  if ($('showAddGroup')) $('showAddGroup').addEventListener('click', () => toggleForm('addGroupForm', 'newGroupName', $('addGroupForm').hidden));
+  if ($('cancelAddGroup')) $('cancelAddGroup').addEventListener('click', () => toggleForm('addGroupForm', null, false));
+  if ($('addGroupForm')) $('addGroupForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const input = $('newGroupName');
+    const name = input ? input.value.trim().toUpperCase() : '';
+    if (!/^G([1-9]|1[0-9]|20)$/.test(name)) { rosterTopStatus('Group names run from G1 to G20.', 'warn'); return; }
+    if (await rosterAction('group_save', { intake: rosterSel.intake, name }, `${name} added to ${rosterSel.intake}.`)) {
+      if (input) input.value = '';
+      toggleForm('addGroupForm', null, false);
+      selectGroup(name);
+    }
+  });
+
+  if ($('showAddTrainee')) $('showAddTrainee').addEventListener('click', () => toggleForm('addTraineeForm', 'newTraineeId', $('addTraineeForm').hidden));
+  if ($('cancelAddTrainee')) $('cancelAddTrainee').addEventListener('click', () => toggleForm('addTraineeForm', null, false));
+  if ($('addTraineeForm')) $('addTraineeForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const { intake, group } = rosterSel;
+    if (!group) { rosterStatus('Open a group first.', 'warn'); return; }
+    const id = $('newTraineeId').value.trim();
+    const family = $('newTraineeFamily').value.trim();
+    const given = $('newTraineeGiven').value.trim();
     if (!id) { rosterStatus('An EnergyTech ID is required.', 'warn'); return; }
     if (!family && !given) { rosterStatus('Enter at least one part of the name.', 'warn'); return; }
-    const ok = await traineeAction('trainee_save',
-      { energytechId: id, familyName: family, givenName: given, intake, group },
-      `${id} added to ${intake} / ${group}.`);
-    if (ok) ['newTraineeId', 'newTraineeFamily', 'newTraineeGiven'].forEach(k => { if ($(k)) $(k).value = ''; });
+    if (await traineeAction('trainee_save', { energytechId: id, familyName: family, givenName: given, intake, group },
+        `${id.toUpperCase()} added to ${intake} / ${group}.`)) {
+      ['newTraineeId', 'newTraineeFamily', 'newTraineeGiven'].forEach(k => { if ($(k)) $(k).value = ''; });
+      $('newTraineeId').focus();               // stay put, ready for the next one
+    }
   });
+
+  /* --- roster: CSV --- */
   if ($('importCsvBtn')) $('importCsvBtn').addEventListener('click', () => {
-    if (!rosterContext.group) { rosterStatus('Open a group first — the file is imported into it.', 'warn'); return; }
+    if (!rosterSel.intake) { rosterStatus('Pick an intake first.', 'warn'); return; }
     if ($('csvFileInput')) $('csvFileInput').click();
   });
   if ($('csvFileInput')) $('csvFileInput').addEventListener('change', e => {
@@ -2971,108 +3239,176 @@ function wireRosterUi() {
     if (file) previewCsv(file);
   });
   if ($('downloadRosterCsvBtn')) $('downloadRosterCsvBtn').addEventListener('click', downloadGroupCsv);
-  if ($('closeTraineeManagerBtn')) $('closeTraineeManagerBtn').addEventListener('click', () => {
-    rosterContext = { intake: '', group: '' };
-    pendingImport = null;
-    if ($('traineeManager')) $('traineeManager').hidden = true;
+
+  /* --- roster: filters --- */
+  if ($('traineeFilters')) $('traineeFilters').addEventListener('click', e => {
+    const chip = e.target.closest('.filter-chip');
+    if (!chip) return;
+    traineeFilter = chip.dataset.filter;
+    renderTraineePane();
   });
 
-  // Session pickers
+  /* --- roster: bulk actions --- */
+  if ($('bulkClearBtn')) $('bulkClearBtn').addEventListener('click', () => { selectedIds.clear(); renderTraineePane(); });
+  if ($('bulkMoveBtn')) $('bulkMoveBtn').addEventListener('click', async () => {
+    const target = $('bulkMoveTarget').value;
+    if (!target || !selectedIds.size) return;
+    const ids = [...selectedIds];
+    // Chunked so a long selection cannot overflow the query string.
+    let moved = 0;
+    for (let i = 0; i < ids.length; i += 25) {
+      const slice = ids.slice(i, i + 25);
+      const data = await rosterCall('trainee_move',
+        { token: authToken, intake: rosterSel.intake, group: target, ids: slice.join(',') }, 'energytechMove');
+      if (!data.ok) { rosterStatus(escapeHtml(data.error || 'Move failed.'), 'bad'); break; }
+      moved += data.moved || 0;
+    }
+    selectedIds.clear();
+    allTrainees = null;
+    await refreshTrainees();
+    await loadRoster(true);
+    rosterFlash(`Moved ${moved} trainee${moved === 1 ? '' : 's'} to ${escapeHtml(target)}.`, 'good');
+  });
+  if ($('bulkRevokeBtn')) $('bulkRevokeBtn').addEventListener('click', async () => {
+    const ids = [...selectedIds].filter(id => {
+      const t = traineeCache.find(x => x.energytechId === id);
+      return t && t.accountStatus === 'active';
+    });
+    if (!ids.length) { rosterStatus('None of the selected trainees has a login to revoke.', 'warn'); return; }
+    if (!confirm(`Revoke the login for ${ids.length} trainee${ids.length === 1 ? '' : 's'}? Their results stay on record.`)) return;
+    for (const id of ids) {
+      await rosterCall('trainee_set_account', { token: authToken, energytechId: id, status: 'revoked' }, 'energytechRevoke');
+    }
+    selectedIds.clear();
+    allTrainees = null;
+    await refreshTrainees();
+    await loadRoster(true);
+    rosterFlash(`Revoked ${ids.length} login${ids.length === 1 ? '' : 's'}.`, 'good');
+  });
+
+  /* --- roster: session pickers --- */
   if ($('sessionIntake')) $('sessionIntake').addEventListener('change', populateSessionGroups);
 
-  // Delegated: everything rendered into rosterOutput / traineeTable / csvPreview.
-  document.addEventListener('click', async (e) => {
-    const t = e.target;
-    if (!t || !t.closest) return;
-    const hit = sel => t.closest(sel);
+  /* --- roster: everything rendered into the panes --- */
+  const ws = $('rosterWorkspace');
+  if (ws) {
+    ws.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const item = e.target.closest && e.target.closest('.pane-item');
+      if (!item) return;
+      e.preventDefault();
+      item.click();
+    });
+    ws.addEventListener('click', async e => {
+      const t = e.target;
+      if (!t || !t.closest) return;
 
-    const intakeRename = hit('.intake-rename');
-    if (intakeRename) {
-      const label = intakeRename.dataset.label;
-      const next = prompt(`Rename intake "${label}" to:`, label);
-      if (next && next.trim() && next.trim() !== label) {
-        rosterAction('intake_save', { label: next.trim(), previousLabel: label }, `Renamed to ${next.trim()}.`);
-      }
-      return;
-    }
-    const intakeDelete = hit('.intake-delete');
-    if (intakeDelete) {
-      const label = intakeDelete.dataset.label;
-      if (confirm(`Delete intake "${label}"? This only works if it has no groups left.`)) {
-        rosterAction('intake_delete', { label }, `Intake ${label} deleted.`);
-      }
-      return;
-    }
-    const groupAdd = hit('.group-add');
-    if (groupAdd) {
-      const intake = groupAdd.dataset.intake;
-      const field = document.querySelector(`.new-group-name[data-intake="${CSS.escape(intake)}"]`);
-      const name = field ? field.value.trim().toUpperCase() : '';
-      if (!/^G([1-9]|1[0-9]|20)$/.test(name)) {
-        rosterTopStatus('Group names run from G1 to G20.', 'warn');
+      /* intake actions come before the row itself, so a click on Rename does
+       * not also re-select the intake underneath it. */
+      const iRename = t.closest('.intake-rename');
+      if (iRename) {
+        const label = iRename.dataset.label;
+        const next = prompt(`Rename intake "${label}" to:`, label);
+        if (next && next.trim() && next.trim().toUpperCase() !== label.toUpperCase()) {
+          if (await rosterAction('intake_save', { label: next.trim(), previousLabel: label }, `Renamed to ${next.trim().toUpperCase()}.`)) {
+            rosterSel.intake = next.trim().toUpperCase();
+            renderWorkspace();
+          }
+        }
         return;
       }
-      if (await rosterAction('group_save', { intake, name }, `${name} added to ${intake}.`) && field) field.value = '';
-      return;
-    }
-    const groupOpen = hit('.group-open');
-    if (groupOpen) { openGroup(groupOpen.dataset.intake, groupOpen.dataset.name); return; }
-    const groupRename = hit('.group-rename');
-    if (groupRename) {
-      const { intake, name } = groupRename.dataset;
-      const next = (prompt(`Rename group "${name}" (G1–G20) to:`, name) || '').trim().toUpperCase();
-      if (!next || next === name) return;
-      if (!/^G([1-9]|1[0-9]|20)$/.test(next)) { rosterTopStatus('Group names run from G1 to G20.', 'warn'); return; }
-      rosterAction('group_save', { intake, name: next, previousName: name }, `Renamed to ${next}.`);
-      return;
-    }
-    const groupDelete = hit('.group-delete');
-    if (groupDelete) {
-      const { intake, name } = groupDelete.dataset;
-      if (confirm(`Delete group "${name}" from ${intake}? This only works if it has no trainees left.`)) {
-        rosterAction('group_delete', { intake, name }, `${name} deleted.`);
+      const iDelete = t.closest('.intake-delete');
+      if (iDelete) {
+        const label = iDelete.dataset.label;
+        if (confirm(`Delete intake "${label}"? This only works if it has no groups left.`)) {
+          if (await rosterAction('intake_delete', { label }, `Intake ${label} deleted.`)) {
+            rosterSel = { intake: '', group: '' };
+            traineeCache = [];
+            renderWorkspace();
+          }
+        }
+        return;
       }
-      return;
-    }
-    const tEdit = hit('.trainee-edit');
-    if (tEdit) {
-      const id = tEdit.dataset.id;
-      const family = prompt('Family name:', tEdit.dataset.family || '');
-      if (family === null) return;
-      const given = prompt('Given name:', tEdit.dataset.given || '');
-      if (given === null) return;
-      traineeAction('trainee_save', {
-        energytechId: id, previousId: id,
-        familyName: family.trim(), givenName: given.trim(),
-        intake: rosterContext.intake, group: rosterContext.group
-      }, `${id} updated.`);
-      return;
-    }
-    const tRevoke = hit('.trainee-revoke');
-    if (tRevoke) {
-      if (confirm(`Revoke the login for ${tRevoke.dataset.id}? Their results stay on record.`)) {
-        traineeAction('trainee_set_account', { energytechId: tRevoke.dataset.id, status: 'revoked' }, 'Login revoked.');
+      const gRename = t.closest('.group-rename');
+      if (gRename) {
+        const name = gRename.dataset.name;
+        const next = (prompt(`Rename group "${name}" (G1–G20) to:`, name) || '').trim().toUpperCase();
+        if (!next || next === name) return;
+        if (!/^G([1-9]|1[0-9]|20)$/.test(next)) { rosterTopStatus('Group names run from G1 to G20.', 'warn'); return; }
+        if (await rosterAction('group_save', { intake: rosterSel.intake, name: next, previousName: name }, `Renamed to ${next}.`)) {
+          rosterSel.group = next;
+          renderWorkspace();
+          refreshTrainees();
+        }
+        return;
       }
-      return;
-    }
-    const tRestore = hit('.trainee-restore');
-    if (tRestore) {
-      traineeAction('trainee_set_account', { energytechId: tRestore.dataset.id, status: 'active' }, 'Login restored.');
-      return;
-    }
-    const tDelete = hit('.trainee-delete');
-    if (tDelete) {
-      if (confirm(`Delete ${tDelete.dataset.id}? This only works if they have no submitted attempts.`)) {
-        traineeAction('trainee_delete', { energytechId: tDelete.dataset.id }, 'Trainee deleted.');
+      const gDelete = t.closest('.group-delete');
+      if (gDelete) {
+        const name = gDelete.dataset.name;
+        if (confirm(`Delete group "${name}" from ${rosterSel.intake}? This only works if it has no trainees left.`)) {
+          if (await rosterAction('group_delete', { intake: rosterSel.intake, name }, `${name} deleted.`)) {
+            rosterSel.group = '';
+            traineeCache = [];
+            renderWorkspace();
+          }
+        }
+        return;
       }
-      return;
-    }
-    if (t.closest('#confirmImportBtn')) { confirmImport(); return; }
-    if (t.closest('#cancelImportBtn')) {
+
+      const tEdit = t.closest('.trainee-edit');
+      if (tEdit) { editingId = tEdit.dataset.id; renderTraineePane(); return; }
+      if (t.closest('.cancel-edit')) { editingId = ''; renderTraineePane(); return; }
+      const tSave = t.closest('.save-trainee');
+      if (tSave) {
+        const row = tSave.closest('tr');
+        const previousId = tSave.dataset.id;
+        const ok = await traineeAction('trainee_save', {
+          energytechId: row.querySelector('.edit-id').value.trim(),
+          previousId,
+          familyName: row.querySelector('.edit-family').value.trim(),
+          givenName: row.querySelector('.edit-given').value.trim(),
+          intake: rosterSel.intake,
+          group: row.querySelector('.edit-group').value
+        }, 'Saved.');
+        if (ok) { editingId = ''; renderTraineePane(); }
+        return;
+      }
+      const tDelete = t.closest('.trainee-delete');
+      if (tDelete) {
+        if (confirm(`Delete ${tDelete.dataset.id}? This only works if they have no submitted attempts.`)) {
+          traineeAction('trainee_delete', { energytechId: tDelete.dataset.id }, 'Trainee deleted.');
+        }
+        return;
+      }
+
+      if (t.id === 'pickAll') {
+        const shown = visibleTrainees();
+        if (shown.every(x => selectedIds.has(x.energytechId))) shown.forEach(x => selectedIds.delete(x.energytechId));
+        else shown.forEach(x => selectedIds.add(x.energytechId));
+        renderTraineePane();
+        return;
+      }
+      const pick = t.closest('.pick-trainee');
+      if (pick) {
+        if (pick.checked) selectedIds.add(pick.dataset.id); else selectedIds.delete(pick.dataset.id);
+        renderBulkBar();
+        return;
+      }
+
+      const intakeRow = t.closest('.pane-item[data-intake]');
+      if (intakeRow) { selectIntake(intakeRow.dataset.intake); return; }
+      const groupRow = t.closest('.pane-item[data-group]');
+      if (groupRow) { selectGroup(groupRow.dataset.group); return; }
+    });
+  }
+
+  /* --- the import preview is rendered outside the workspace grid --- */
+  document.addEventListener('click', e => {
+    if (!e.target || !e.target.closest) return;
+    if (e.target.closest('#confirmImportBtn')) { confirmImport(); return; }
+    if (e.target.closest('#cancelImportBtn')) {
       pendingImport = null;
       if ($('csvPreview')) { $('csvPreview').hidden = true; $('csvPreview').innerHTML = ''; }
-      return;
     }
   });
 }
-
