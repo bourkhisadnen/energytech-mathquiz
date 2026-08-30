@@ -435,6 +435,16 @@
           </div>
           <div id="traineePasswordStatus" class="feedback empty"></div>
         </div>
+
+        <!-- The trainee's own record, kept below the session code so it never
+             sits between them and starting a quiz. -->
+        <section id="myHistoryPanel" class="my-history" hidden>
+          <div class="my-history-head">
+            <h3>My results</h3>
+            <button id="myHistoryRefreshBtn" class="secondary" type="button">Refresh</button>
+          </div>
+          <div id="myHistoryBody"></div>
+        </section>
       </section>
 
       <section id="studentQuizArea" hidden>

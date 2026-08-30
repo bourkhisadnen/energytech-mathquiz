@@ -873,6 +873,60 @@ a.list-pill {
 .history-table td { vertical-align: middle; }
 .history-table .score-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
 
+.guest-tag {
+  display: inline-block; padding: 1px 6px; border-radius: 999px;
+  background: #f3e6c7; color: #7a5a10; font-size: .7rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .04em; vertical-align: middle;
+}
+
+/* On a phone the button column falls off the right-hand edge, where nobody
+   would find it. The row itself opens the attempt, so on a narrow screen the
+   button and the two least useful columns come out and what is left fits. */
+.when-date { display: block; }
+.when-time { white-space: nowrap; }
+
+/* The trainee's own list is three columns -- when, what it covered, and the
+   score -- so it fits a phone without anything being hidden. */
+.history-table.simple td:nth-child(2) { line-height: 1.5; }
+.history-table.simple .mode-pill { margin-left: 4px; }
+.history-table.simple .quiz-name { font-weight: 650; }
+
+@media (max-width: 640px) {
+  /* The instructor's six-column table is the one that has to give ground: the
+     session name, the mode and the button column come out, and the row itself
+     is what opens the attempt. */
+  .history-table:not(.simple) th:nth-child(3), .history-table:not(.simple) td:nth-child(3),
+  .history-table:not(.simple) th:nth-child(4), .history-table:not(.simple) td:nth-child(4),
+  .history-table:not(.simple) th:nth-child(6), .history-table:not(.simple) td:nth-child(6) { display: none; }
+  .history-table:not(.simple) .when-time { display: none; }
+  .history-table { width: 100%; font-size: .88rem; }
+  .history-table .score-cell .hint { display: none; }
+  /* Fixed columns, or the quiz label takes the width it likes and pushes the
+     score -- the one thing they came to see -- off the right-hand edge. */
+  /* .dashboard-table sets white-space: nowrap on every cell, which is why the
+     label ran past its column instead of wrapping inside it. */
+  .history-table.simple { table-layout: fixed; }
+  .history-table.simple th, .history-table.simple td { white-space: normal; }
+  .history-table.simple th:nth-child(1), .history-table.simple td:nth-child(1) { width: 34%; }
+  .history-table.simple th:nth-child(3), .history-table.simple td:nth-child(3) { width: 19%; }
+  .history-table.simple .when-date { white-space: nowrap; }
+  .history-table.simple .mode-pill { display: inline-block; margin: 3px 0 0; }
+  .history-table th, .history-table td { padding-left: 8px; padding-right: 8px; }
+  .history-table td { word-break: break-word; }
+}
+
+/* The whole row opens the attempt, so it has to look like it does. */
+.attempt-row { cursor: pointer; }
+.attempt-row:hover { background: #eef4fb; }
+.attempt-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* The trainee's own record, on their home screen. */
+.my-history { margin-top: 22px; padding-top: 18px; border-top: 2px solid var(--border); }
+.my-history-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+.my-history-head h3 { margin: 0; color: var(--blue); font-size: 1.1rem; }
+
 .name-link {
   background: none; border: 0; padding: 0; font: inherit; color: var(--accent);
   cursor: pointer; text-align: left; text-decoration: underline; text-underline-offset: .15em;

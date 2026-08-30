@@ -1,4 +1,4 @@
-const CACHE_NAME = 'energytech-quiz-app-v37-q32-figure';
+const CACHE_NAME = 'energytech-quiz-app-v40-session-name';
 const FILES = [
   './',
   './index.html',

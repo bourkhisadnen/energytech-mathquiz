@@ -151,6 +151,10 @@ function doGet(e) {
       data = traineeHistory_(params);
     } else if (params.action === 'attempt_detail') {
       data = attemptDetail_(params);
+    } else if (params.action === 'my_history') {
+      data = myHistory_(params);
+    } else if (params.action === 'my_attempt') {
+      data = myAttempt_(params);
     } else if (params.action === 'trainee_move') {
       data = traineeMove_(params);
     } else if (params.action === 'trainee_set_account') {
@@ -1166,17 +1170,15 @@ function saveAttempt_(p) {
 
 /* One trainee's whole record: every attempt, plus how they do lesson by lesson.
  * The lesson tally is what turns a list of scores into something an instructor
- * can act on -- it names the topics to go back over. */
-function traineeHistory_(params) {
-  const auth = requireAuth_(params);
-  if (!auth.ok) return auth;
-  const id = normId_(params.energytechId);
-  if (!id) return { ok: false, error: 'No trainee named.' };
-
+ * can act on -- it names the topics to go back over.
+ *
+ * `mine(owner)` decides which rows the caller may see. An instructor passes a
+ * filter that hides other instructors' sessions; a trainee reading their own
+ * record passes one that allows everything, because their history is theirs no
+ * matter who ran the session. Both routes share this body so that a change to
+ * the lesson analysis can never apply to one and not the other. */
+function historyFor_(id, mine) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const isAdmin = auth.instructor.role === 'admin';
-  const viewer = normalizeUsername_(auth.instructor.username);
-  const mine = owner => isAdmin || normalizeUsername_(owner) === viewer;
 
   const found = findTraineeRow_(traineesSheet_(), id);
   const trainee = found ? traineePublic_(found.row) : { energytechId: id, name: '', intake: '', group: '', accountStatus: 'none' };
@@ -1197,7 +1199,12 @@ function traineeHistory_(params) {
       orderMode: String(row[12] || 'original'),
       score: Number(row[13] || 0),
       total: Number(row[14] || 0),
-      percent: Number(row[15] || 0)
+      percent: Number(row[15] || 0),
+      // A guest sitting types their own ID, so a walk-in row can land on a real
+      // trainee's record. It is still a paper sat under that ID, so it is shown
+      // rather than hidden -- but it is labelled, so nobody has to guess why an
+      // unfamiliar quiz is in their list.
+      registered: String(row[22] || '')
     });
   });
   attempts.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
@@ -1221,22 +1228,36 @@ function traineeHistory_(params) {
   return { ok: true, trainee: trainee, attempts: attempts, lessons: lessons };
 }
 
-/* Every question of one attempt, so it can be shown back the way the trainee
- * saw it when they submitted. */
-function attemptDetail_(params) {
+function traineeHistory_(params) {
   const auth = requireAuth_(params);
   if (!auth.ok) return auth;
-  const attemptId = String(params.attemptId || '').trim();
-  if (!attemptId) return { ok: false, error: 'No attempt named.' };
+  const id = normId_(params.energytechId);
+  if (!id) return { ok: false, error: 'No trainee named.' };
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const isAdmin = auth.instructor.role === 'admin';
   const viewer = normalizeUsername_(auth.instructor.username);
+  return historyFor_(id, owner => isAdmin || normalizeUsername_(owner) === viewer);
+}
+
+/* A trainee reading their own record. The identity comes from the token, never
+ * from a parameter, so there is no id to tamper with. */
+function myHistory_(params) {
+  const auth = requireTrainee_(params);
+  if (!auth.ok) return auth;
+  return historyFor_(normId_(auth.trainee.energytechId), function () { return true; });
+}
+
+/* Every question of one attempt, so it can be shown back the way the trainee
+ * saw it when they submitted.
+ *
+ * `allow(row)` is the access test, applied to the attempt row itself. */
+function attemptFor_(attemptId, allow) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   let attempt = null;
   rowsOf_(ss.getSheetByName(SHEET_ATTEMPTS)).forEach(row => {
     if (String(row[1] || '') !== attemptId) return;
-    if (!isAdmin && normalizeUsername_(row[19]) !== viewer) return;
+    if (!allow(row)) return;
     attempt = {
       timestamp: row[0] instanceof Date ? row[0].toISOString() : String(row[0] || ''),
       attemptId: attemptId,
@@ -1258,7 +1279,7 @@ function attemptDetail_(params) {
       registered: String(row[22] || '')
     };
   });
-  if (!attempt) return { ok: false, error: 'That attempt is not on record, or belongs to another instructor.' };
+  if (!attempt) return { ok: false, error: 'That attempt is not on record, or belongs to someone else.' };
 
   const items = [];
   rowsOf_(ss.getSheetByName(SHEET_ITEMS)).forEach(row => {
@@ -1275,6 +1296,29 @@ function attemptDetail_(params) {
   items.sort((a, b) => a.quizNumber - b.quizNumber);
 
   return { ok: true, attempt: attempt, items: items };
+}
+
+function attemptDetail_(params) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  const attemptId = String(params.attemptId || '').trim();
+  if (!attemptId) return { ok: false, error: 'No attempt named.' };
+
+  const isAdmin = auth.instructor.role === 'admin';
+  const viewer = normalizeUsername_(auth.instructor.username);
+  return attemptFor_(attemptId, row => isAdmin || normalizeUsername_(row[19]) === viewer);
+}
+
+/* A trainee opening one of their own attempts. The row's EnergyTech ID must be
+ * theirs -- knowing or guessing an attempt id is not enough. */
+function myAttempt_(params) {
+  const auth = requireTrainee_(params);
+  if (!auth.ok) return auth;
+  const attemptId = String(params.attemptId || '').trim();
+  if (!attemptId) return { ok: false, error: 'No attempt named.' };
+
+  const me = normId_(auth.trainee.energytechId);
+  return attemptFor_(attemptId, row => normId_(row[4]) === me);
 }
 
 function buildSummary_(params) {

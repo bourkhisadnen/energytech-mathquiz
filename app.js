@@ -1347,6 +1347,10 @@ async function submitOnlineResult(target = 'student') {
       if (mode === 'practice') {
         $('studentFeedback').innerHTML += `<p class="good"><strong>Result submitted online.</strong></p>`;
       }
+      // The POST is opaque (no-cors), so there is nothing to wait on. Give the
+      // Sheet a moment to finish writing the rows, then pull the record again so
+      // the quiz they have just sat is in their own list when they scroll down.
+      if (traineeLoggedIn()) setTimeout(loadMyHistory, 2500);
     } else {
       setOnlineStatus(
         `Result submitted. Trainee: <strong>${escapeHtml(payload.student.name || 'Unnamed')}</strong>. Score: <strong>${payload.score.correct} / ${payload.score.total}</strong> (${payload.score.percent}%).`,
@@ -2388,7 +2392,13 @@ function renderTraineeHome() {
   if ($('traineeHomePanel')) $('traineeHomePanel').hidden = !loggedIn;
   // A guest who is midway through a session keeps their quiz on screen.
   if ($('studentQuizArea') && !loggedIn && !walkInIdentity) $('studentQuizArea').hidden = true;
-  if (!loggedIn) return;
+  if (!loggedIn) {
+    // A guest must not be left looking at the last trainee's results.
+    if ($('myHistoryPanel')) $('myHistoryPanel').hidden = true;
+    if ($('myHistoryBody')) $('myHistoryBody').innerHTML = '';
+    MY_VIEW.data = null;
+    return;
+  }
   walkInIdentity = null;
 
   const p = traineeProfile;
@@ -2404,6 +2414,9 @@ function renderTraineeHome() {
         <div><dt>Group</dt><dd>${escapeHtml(p.group || '—')}</dd></div>
       </dl>`;
   }
+
+  // Their record loads on its own; the home screen is usable before it arrives.
+  loadMyHistory();
 }
 
 function toggleTraineeSignup(force) {
@@ -3172,10 +3185,37 @@ function studentIdentity() {
 
 /* ==========================================================================
  * Trainee profile: one person's record, and one attempt in full
+ *
+ * Two people look at this: an instructor opening a trainee from the roster, and
+ * the trainee looking at their own record on their home screen. They see the
+ * same thing, so there is one renderer and one view object per audience saying
+ * where to draw, which backend action to call, and whose token to send. Writing
+ * it twice would let the two drift, and the trainee's copy is the one nobody
+ * would notice going stale.
  * ========================================================================== */
 
+const INSTRUCTOR_VIEW = {
+  self: false,
+  target: 'profileBody',
+  scrollTo: 'traineeProfileView',
+  historyAction: 'trainee_history',
+  attemptAction: 'attempt_detail',
+  data: null,
+  auth: () => ({ token: authToken })
+};
+
+const MY_VIEW = {
+  self: true,
+  target: 'myHistoryBody',
+  scrollTo: 'myHistoryPanel',
+  historyAction: 'my_history',
+  attemptAction: 'my_attempt',
+  data: null,
+  auth: () => ({ token: traineeToken })
+};
+
 let profileId = '';          // trainee whose profile is open, '' when closed
-let profileData = null;
+let profileData = null;      // kept as an alias of INSTRUCTOR_VIEW.data
 
 function showRoster() {
   profileId = '';
@@ -3185,26 +3225,48 @@ function showRoster() {
   if ($('rosterSearch')) $('rosterSearch').closest('.roster-toolbar').hidden = false;
 }
 
+function paint(view, html) {
+  const el = $(view.target);
+  if (el) el.innerHTML = html;
+}
+
+async function loadHistoryInto(view, params) {
+  paint(view, '<p class="pane-empty">Loading&hellip;</p>');
+  try {
+    const data = await rosterCall(view.historyAction,
+      Object.assign(view.auth(), params), 'energytechHistory', 1);
+    if (!data.ok) {
+      paint(view, `<div class="feedback bad">${escapeHtml(data.error || 'Could not load this record.')}</div>`);
+      return false;
+    }
+    view.data = data;
+    if (view === INSTRUCTOR_VIEW) profileData = data;
+    renderProfile(view);
+    return true;
+  } catch (err) {
+    paint(view, `<div class="feedback bad">${escapeHtml(err.message || String(err))}</div>`);
+    return false;
+  }
+}
+
 async function openProfile(energytechId) {
   profileId = energytechId;
   profileData = null;
+  INSTRUCTOR_VIEW.data = null;
   if ($('rosterWorkspace')) $('rosterWorkspace').hidden = true;
   if ($('rosterSearch')) $('rosterSearch').closest('.roster-toolbar').hidden = true;
   if ($('traineeProfileView')) $('traineeProfileView').hidden = false;
   if ($('profileCrumb')) $('profileCrumb').textContent = energytechId;
-  if ($('profileBody')) $('profileBody').innerHTML = '<p class="pane-empty">Loading&hellip;</p>';
   if ($('traineeProfileView')) $('traineeProfileView').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  try {
-    const data = await rosterCall('trainee_history', { token: authToken, energytechId }, 'energytechHistory', 1);
-    if (!data.ok) {
-      $('profileBody').innerHTML = `<div class="feedback bad">${escapeHtml(data.error || 'Could not load this trainee.')}</div>`;
-      return;
-    }
-    profileData = data;
-    renderProfile();
-  } catch (err) {
-    $('profileBody').innerHTML = `<div class="feedback bad">${escapeHtml(err.message || String(err))}</div>`;
-  }
+  await loadHistoryInto(INSTRUCTOR_VIEW, { energytechId });
+}
+
+/* The trainee's own record, on their home screen. Nothing identifies them in
+ * the request: the backend reads the id off the token. */
+async function loadMyHistory() {
+  if (!traineeLoggedIn() || !$('myHistoryBody')) return;
+  if ($('myHistoryPanel')) $('myHistoryPanel').hidden = false;
+  await loadHistoryInto(MY_VIEW, {});
 }
 
 function whenText(iso) {
@@ -3214,13 +3276,26 @@ function whenText(iso) {
   return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+/* Date and time separately, so a narrow screen can drop the time and still show
+ * the score, which is the column a trainee actually came for. */
+function whenParts(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d.getTime())) return { date: String(iso || ''), time: '' };
+  return {
+    date: d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
+    time: d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  };
+}
+
 function scoreBand(percent) {
   return percent >= 80 ? 'good' : percent >= 50 ? 'warn' : 'bad';
 }
 
-function renderProfile() {
-  const { trainee, attempts, lessons } = profileData;
-  if ($('profileCrumb')) $('profileCrumb').textContent = `${trainee.name || trainee.energytechId}`;
+function renderProfile(view) {
+  view = view || INSTRUCTOR_VIEW;
+  const { trainee, attempts, lessons } = view.data;
+  const self = view.self;
+  if (!self && $('profileCrumb')) $('profileCrumb').textContent = `${trainee.name || trainee.energytechId}`;
 
   const done = attempts.length;
   const avg = done ? Math.round(attempts.reduce((a, x) => a + x.percent, 0) / done) : 0;
@@ -3230,7 +3305,15 @@ function renderProfile() {
   // Only lessons with enough questions to mean anything, weakest first.
   const weak = lessons.filter(l => l.total >= 2 && l.percent < 100).slice(0, 5);
 
-  $('profileBody').innerHTML = `
+  // How many quizzes fall on each date, so the time can be shown on the days
+  // that had more than one and left off every other row.
+  const sameDay = {};
+  attempts.forEach(a => {
+    const d = whenParts(a.timestamp).date;
+    sameDay[d] = (sameDay[d] || 0) + 1;
+  });
+
+  const head = self ? '' : `
     <header class="profile-head">
       <div>
         <h3>${escapeHtml(trainee.name || '(no name)')}</h3>
@@ -3238,8 +3321,10 @@ function renderProfile() {
           · ${escapeHtml(trainee.intake || '—')} / ${escapeHtml(trainee.group || '—')}
           · ${accountBadge(trainee.accountStatus || 'none')}</p>
       </div>
-    </header>
+    </header>`;
 
+  paint(view, `
+    ${head}
     <div class="stat-row">
       <div class="stat"><span class="stat-value">${done}</span><span class="stat-label">quiz${done === 1 ? '' : 'zes'} taken</span></div>
       <div class="stat"><span class="stat-value ${done ? scoreBand(avg) + '-text' : ''}">${done ? avg + '%' : '—'}</span><span class="stat-label">average</span></div>
@@ -3247,7 +3332,7 @@ function renderProfile() {
       <div class="stat"><span class="stat-value">${answered}</span><span class="stat-label">questions answered</span></div>
     </div>
 
-    <h4 class="profile-h">Weakest lessons</h4>
+    <h4 class="profile-h">${self ? 'Lessons to go back over' : 'Weakest lessons'}</h4>
     ${weak.length ? `<ul class="lesson-bars">${weak.map(l => `
       <li>
         <span class="lesson-name">Lesson ${escapeHtml(l.lesson)}</span>
@@ -3256,39 +3341,74 @@ function renderProfile() {
         <span class="lesson-count">${l.correct} of ${l.total}</span>
       </li>`).join('')}</ul>`
       : `<p class="pane-empty">${answered
-          ? 'Nothing stands out yet — every lesson with more than one question is at 100%.'
-          : 'No questions answered yet, so there is nothing to analyse.'}</p>`}
+          ? (self
+              ? 'Nothing stands out — every lesson with more than one question is at 100%.'
+              : 'Nothing stands out yet — every lesson with more than one question is at 100%.')
+          : (self
+              ? 'You have not answered any questions yet, so there is nothing to analyse.'
+              : 'No questions answered yet, so there is nothing to analyse.')}</p>`}
 
-    <h4 class="profile-h">History</h4>
-    ${done ? `<div class="table-wrap"><table class="dashboard-table history-table">
-        <thead><tr><th>When</th><th>Session</th><th>Covering</th><th>Mode</th><th>Score</th><th></th></tr></thead>
-        <tbody>${attempts.map(a => `
-          <tr>
-            <td>${escapeHtml(whenText(a.timestamp))}</td>
-            <td>${escapeHtml(a.sessionName || a.sessionCode || '—')}<br><span class="mono hint">${escapeHtml(a.sessionCode)}</span></td>
+    <h4 class="profile-h">${self ? 'My quizzes' : 'History'}</h4>
+    ${done ? `<p class="hint">${self ? 'Tap a quiz to see every question and what you answered.' : 'Open a row to see the paper as it was answered.'}</p>
+      <div class="table-wrap"><table class="dashboard-table history-table${self ? ' simple' : ''}">
+        ${self
+          ? '<thead><tr><th>When</th><th>Quiz</th><th>Score</th></tr></thead>'
+          : '<thead><tr><th>When</th><th>Session</th><th>Covering</th><th>Mode</th><th>Score</th><th></th></tr></thead>'}
+        <tbody>${attempts.map(a => {
+          const when = whenParts(a.timestamp);
+          const guest = a.registered && a.registered !== 'yes'
+            ? '<span class="guest-tag" title="Sat as a guest, without logging in">guest</span>' : '';
+          const mode = `<span class="mode-pill ${escapeHtml(a.mode || 'practice')}">${escapeHtml((a.mode || 'practice').toUpperCase())}</span>`;
+          const score = `<td class="score-cell"><strong class="${scoreBand(a.percent)}-text">${a.score} / ${a.total}</strong> <span class="hint">${a.percent}%</span></td>`;
+          const open = `<tr class="attempt-row" data-attempt="${escapeHtml(a.attemptId)}" tabindex="0" role="button">`;
+
+          // The trainee's own list leads with the session name -- the label
+          // their instructor gave the sitting, which is what they will have
+          // heard it called -- and carries what it covered underneath. The
+          // session code stays out: it is a join code, thrown away once the
+          // session is over. The time is shown only when two quizzes fall on
+          // the same day and the date alone cannot tell them apart.
+          if (self) {
+            const title = a.sessionName || a.questionSet || '—';
+            const covered = a.questionSet && a.sessionName && a.questionSet !== a.sessionName
+              ? `<br><span class="hint">${escapeHtml(a.questionSet)}</span>` : '';
+            return `${open}
+              <td><span class="when-date">${escapeHtml(when.date)}</span>
+                ${sameDay[when.date] > 1 ? `<span class="when-time hint">${escapeHtml(when.time)}</span>` : ''}</td>
+              <td><span class="quiz-name">${escapeHtml(title)}</span> ${mode} ${guest}${covered}</td>
+              ${score}
+            </tr>`;
+          }
+          return `${open}
+            <td><span class="when-date">${escapeHtml(when.date)}</span>
+              <span class="when-time hint">${escapeHtml(when.time)}</span></td>
+            <td>${escapeHtml(a.sessionName || a.sessionCode || '—')} ${guest}
+              <br><span class="mono hint">${escapeHtml(a.sessionCode)}</span></td>
             <td>${escapeHtml(a.questionSet || '—')}</td>
-            <td><span class="mode-pill ${escapeHtml(a.mode || 'practice')}">${escapeHtml((a.mode || 'practice').toUpperCase())}</span></td>
-            <td class="score-cell"><strong class="${scoreBand(a.percent)}-text">${a.score} / ${a.total}</strong> <span class="hint">${a.percent}%</span></td>
+            <td>${mode}</td>
+            ${score}
             <td class="row-actions"><button type="button" class="icon-btn open-attempt" data-attempt="${escapeHtml(a.attemptId)}">See answers</button></td>
-          </tr>`).join('')}</tbody></table></div>`
-      : '<p class="pane-empty">This trainee has not sat a quiz yet.</p>'}`;
+          </tr>`;
+        }).join('')}</tbody></table></div>`
+      : `<p class="pane-empty">${self ? 'You have not sat a quiz yet. Once you do, it will appear here.' : 'This trainee has not sat a quiz yet.'}</p>`}`);
 }
 
 /* ---------------- one attempt, question by question ---------------- */
 
-async function openAttempt(attemptId) {
-  if ($('profileBody')) $('profileBody').innerHTML = '<p class="pane-empty">Loading the answers&hellip;</p>';
+async function openAttempt(view, attemptId) {
+  const back = `<div class="button-row"><button type="button" class="secondary back-to-profile">${
+    view.self ? '&#8592; Back to my results' : 'Back to the profile'}</button></div>`;
+  paint(view, '<p class="pane-empty">Loading the answers&hellip;</p>');
   try {
-    const data = await rosterCall('attempt_detail', { token: authToken, attemptId }, 'energytechAttempt', 1);
+    const data = await rosterCall(view.attemptAction,
+      Object.assign(view.auth(), { attemptId }), 'energytechAttempt', 1);
     if (!data.ok) {
-      $('profileBody').innerHTML = `<div class="feedback bad">${escapeHtml(data.error || 'Could not load that attempt.')}</div>
-        <div class="button-row"><button type="button" id="backToProfileBtn" class="secondary">Back to the profile</button></div>`;
+      paint(view, `<div class="feedback bad">${escapeHtml(data.error || 'Could not load that attempt.')}</div>${back}`);
       return;
     }
-    renderAttempt(data);
+    renderAttempt(view, data);
   } catch (err) {
-    $('profileBody').innerHTML = `<div class="feedback bad">${escapeHtml(err.message || String(err))}</div>
-      <div class="button-row"><button type="button" id="backToProfileBtn" class="secondary">Back to the profile</button></div>`;
+    paint(view, `<div class="feedback bad">${escapeHtml(err.message || String(err))}</div>${back}`);
   }
 }
 
@@ -3308,7 +3428,7 @@ function rebuildAttemptQuestions(attempt) {
   } catch { return []; }
 }
 
-function renderAttempt(data) {
+function renderAttempt(view, data) {
   const { attempt, items } = data;
   const questions = rebuildAttemptQuestions(attempt);
   // If the bank has changed since, the rebuild will not line up; say so rather
@@ -3343,9 +3463,10 @@ function renderAttempt(data) {
     </article>`;
   }).join('');
 
-  $('profileBody').innerHTML = `
+  paint(view, `
     <div class="button-row">
-      <button type="button" id="backToProfileBtn" class="secondary">&#8592; Back to ${escapeHtml(attempt.name || 'the profile')}</button>
+      <button type="button" class="secondary back-to-profile">&#8592; Back to ${
+        view.self ? 'my results' : escapeHtml(attempt.name || 'the profile')}</button>
     </div>
     <header class="profile-head">
       <div>
@@ -3358,8 +3479,9 @@ function renderAttempt(data) {
         <span>${attempt.percent}%</span></div>
     </header>
     ${trustworthy ? '' : `<div class="feedback warn">The questions could not be rebuilt for this attempt, so only the answers are shown. This happens when the question bank has changed since it was sat.</div>`}
-    <div class="review-list">${cards}</div>`;
-  if ($('traineeProfileView')) $('traineeProfileView').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    <div class="review-list">${cards}</div>`);
+  const anchor = $(view.scrollTo);
+  if (anchor) anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /* ---------------- event wiring ---------------- */
@@ -3670,15 +3792,37 @@ function wireRosterUi() {
     });
   }
 
-  /* --- trainee profile --- */
+  /* --- trainee profile: the same three gestures for both audiences --- */
+  // A whole row opens the attempt, so it works under a thumb as well as a
+  // mouse; the button inside it stays for people who look for one.
+  function wireHistoryPane(containerId, view) {
+    const pane = $(containerId);
+    if (!pane) return;
+    const open = t => {
+      const row = t.closest('.open-attempt') || t.closest('.attempt-row');
+      if (row) { openAttempt(view, row.dataset.attempt); return true; }
+      if (t.closest('.back-to-profile')) {
+        if (view.data) renderProfile(view);
+        return true;
+      }
+      return false;
+    };
+    pane.addEventListener('click', e => {
+      if (e.target && e.target.closest) open(e.target);
+    });
+    pane.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (e.target && e.target.closest && e.target.classList.contains('attempt-row')) {
+        e.preventDefault();
+        open(e.target);
+      }
+    });
+  }
+
   if ($('profileBackBtn')) $('profileBackBtn').addEventListener('click', showRoster);
-  if ($('traineeProfileView')) $('traineeProfileView').addEventListener('click', e => {
-    const t = e.target;
-    if (!t || !t.closest) return;
-    const openBtn = t.closest('.open-attempt');
-    if (openBtn) { openAttempt(openBtn.dataset.attempt); return; }
-    if (t.closest('#backToProfileBtn')) { renderProfile(); return; }
-  });
+  wireHistoryPane('traineeProfileView', INSTRUCTOR_VIEW);
+  wireHistoryPane('myHistoryPanel', MY_VIEW);
+  if ($('myHistoryRefreshBtn')) $('myHistoryRefreshBtn').addEventListener('click', loadMyHistory);
 
   /* --- the import preview is rendered outside the workspace grid --- */
   document.addEventListener('click', e => {
