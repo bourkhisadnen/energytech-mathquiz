@@ -1039,7 +1039,14 @@ function buildQuizFromSettings(settings = {}, target = 'teacher') {
   studentSubmitted = false;
 
   const setLabel = selectionLabel(setKey);
-  const summaryText = `Session <strong>${escapeHtml((currentSession && currentSession.sessionCode) || 'Preview')}</strong> — <strong>${n}</strong> questions from <strong>${escapeHtml(setLabel)}</strong>. Mode: <span class="mode-pill ${escapeHtml((currentSession && currentSession.mode) || 'practice')}">${escapeHtml(((currentSession && currentSession.mode) || 'practice').toUpperCase())}</span>.`;
+  const mode = (currentSession && currentSession.mode) || 'practice';
+  const summaryText = target === 'student' && mode === 'assessment'
+    ? examHeaderHtml(n)
+    : `Session <strong>${escapeHtml((currentSession && currentSession.sessionCode) || 'Preview')}</strong> — <strong>${n}</strong> questions from <strong>${escapeHtml(setLabel)}</strong>. Mode: <span class="mode-pill ${escapeHtml(mode)}">${escapeHtml(mode.toUpperCase())}</span>.`;
+
+  // An exam clears the screen of everything but the trainee's own details and
+  // the paper: no session box, no history, no navigation to wander off into.
+  setExamMode(target === 'student' && mode === 'assessment');
 
   const summaryEl = target === 'student' ? $('studentQuizSummary') : $('quizSummary');
   const containerEl = target === 'student' ? $('studentQuizContainer') : $('quizContainer');
@@ -1056,6 +1063,53 @@ function buildQuizFromSettings(settings = {}, target = 'teacher') {
 
   if ($('teacherPreviewArea') && target === 'teacher') $('teacherPreviewArea').hidden = false;
   if ($('studentQuizArea') && target === 'student') $('studentQuizArea').hidden = false;
+}
+
+/* ==========================================================================
+ * Exam mode: the page while a trainee is sitting an assessment
+ *
+ * Everything that is not the paper comes off the screen -- the session code box,
+ * their results, the change-password panel, the header buttons. What is left is
+ * a strip identifying whose paper this is, the questions, and Submit. It is the
+ * paper equivalent of clearing the desk.
+ * ========================================================================== */
+
+function setExamMode(on) {
+  document.body.classList.toggle('exam-mode', Boolean(on));
+  // The download writes the score and the wrong-question list into a file, and
+  // computing it marks the right answers on screen. During an exam that is a
+  // way to read the paper's key, so the button is not there to press.
+  const dl = $('studentDownloadResultBtn');
+  if (dl) dl.hidden = Boolean(on);
+}
+
+function examHeaderHtml(n) {
+  const who = studentIdentity();
+  const s = currentSession || {};
+  return `
+    <div class="exam-head">
+      <div class="exam-who">
+        <strong>${escapeHtml(who.name || '')}</strong>
+        <span class="exam-meta"><span class="mono">${escapeHtml(who.energytechId || '')}</span>
+          · ${escapeHtml(s.intake || who.intake || '—')} / ${escapeHtml(who.group || s.group || '—')}</span>
+      </div>
+      <div class="exam-what">
+        <strong>${escapeHtml(s.sessionName || s.sessionCode || 'Exam')}</strong>
+        <span class="exam-meta">${n} question${n === 1 ? '' : 's'}
+          · <span class="mono">${escapeHtml(s.sessionCode || '')}</span></span>
+      </div>
+      <div class="exam-progress"><span id="examProgress">0 of ${n} answered</span></div>
+    </div>`;
+}
+
+/* Answered-so-far, updated as they go. Without it the only way to know whether
+ * anything has been missed is to scroll the whole paper again. */
+function updateExamProgress() {
+  const el = $('examProgress');
+  if (!el || !currentQuiz.length) return;
+  const done = currentQuiz.length - unansweredIndices().length;
+  el.textContent = `${done} of ${currentQuiz.length} answered`;
+  el.classList.toggle('all-done', done === currentQuiz.length);
 }
 
 /* Nothing ticked means there is no pool to draw from -- say so plainly rather
@@ -1306,7 +1360,9 @@ async function copyReference() {
 }
 
 function downloadResult() {
-  if (!lastFeedback) calculateScore();
+  // reveal:false matters. Marking the paper used to light up the correct choice
+  // on every card as a side effect, so pressing this mid-exam showed the key.
+  if (!lastFeedback) calculateScore({ reveal: false });
   const who = studentIdentity();
   const lines = [];
   lines.push('EnergyTech Mathematics Quiz — result');
@@ -1427,6 +1483,9 @@ async function submitOnlineResult(target = 'student') {
       if (mode === 'practice') {
         $('studentFeedback').innerHTML += `<p class="good"><strong>Result submitted online.</strong></p>`;
       }
+      // The paper is done, so the screen comes back: their details, the session
+      // box, their results. The exam itself is now a pending row in that list.
+      setExamMode(false);
       // The POST is opaque (no-cors), so there is nothing to wait on. Give the
       // Sheet a moment to finish writing the rows, then pull the record again so
       // the quiz they have just sat is in their own list when they scroll down.
@@ -2367,6 +2426,11 @@ function init() {
   if ($('loadTraineeSessionBtn')) $('loadTraineeSessionBtn').addEventListener('click', loadTraineeSession);
   if ($('studentSessionCode')) $('studentSessionCode').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
   if ($('studentSubmitBtn')) $('studentSubmitBtn').addEventListener('click', () => submitOnlineResult('student'));
+  // One listener on the container rather than one per radio, so it keeps working
+  // when the paper is redrawn.
+  if ($('studentQuizContainer')) {
+    $('studentQuizContainer').addEventListener('change', updateExamProgress);
+  }
   if ($('studentClearBtn')) $('studentClearBtn').addEventListener('click', () => clearAnswers('student'));
   if ($('studentDownloadResultBtn')) $('studentDownloadResultBtn').addEventListener('click', studentDownloadResult);
   
@@ -2526,6 +2590,7 @@ function renderTraineeHome() {
     if ($('myHistoryPanel')) $('myHistoryPanel').hidden = true;
     if ($('myHistoryBody')) $('myHistoryBody').innerHTML = '';
     MY_VIEW.data = null;
+    setExamMode(false);
     return;
   }
   walkInIdentity = null;

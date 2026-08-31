@@ -189,6 +189,36 @@ const APP_MUTANTS = [
     suite: 'test_shuffle.js'
   },
   {
+    what: 'the exam page keeps the rest of the app on screen',
+    from: "  setExamMode(target === 'student' && mode === 'assessment');",
+    to:   "  setExamMode(false);",
+    suite: 'test_exam_view.js'
+  },
+  {
+    what: 'marking the paper for the download reveals the key again',
+    from: "  if (!lastFeedback) calculateScore({ reveal: false });",
+    to:   "  if (!lastFeedback) calculateScore();",
+    suite: 'test_exam_view.js'
+  },
+  {
+    what: 'the download button stays on screen during an exam',
+    from: "  if (dl) dl.hidden = Boolean(on);",
+    to:   "  if (dl) dl.hidden = false;",
+    suite: 'test_exam_view.js'
+  },
+  {
+    what: 'the screen never comes back after the exam is submitted',
+    from: "      setExamMode(false);\n      // The POST is opaque (no-cors), so there is nothing to wait on.",
+    to:   "      // The POST is opaque (no-cors), so there is nothing to wait on.",
+    suite: 'test_exam_view.js'
+  },
+  {
+    what: 'the progress counter stops counting',
+    from: "    $('studentQuizContainer').addEventListener('change', updateExamProgress);",
+    to:   "    $('studentQuizContainer').addEventListener('change', () => {});",
+    suite: 'test_exam_view.js'
+  },
+  {
     what: 'a legacy attempt is rebuilt on a fresh stream instead of the old one',
     from: "    selected = shuffle(selected, rng);\n  }\n  if (orderSeed) selected = shuffleChoicesOf(selected, orderSeed);",
     to:   "    selected = shuffle(selected, seededRandom(seed + '|order'));\n  }\n  if (orderSeed) selected = shuffleChoicesOf(selected, orderSeed);",
@@ -196,9 +226,29 @@ const APP_MUTANTS = [
   }
 ];
 
+/* The browser suites fetch the app over HTTP. If the server is rooted at a COPY
+ * of the source tree, every app.js mutation below is patching a file the browser
+ * never loads, and all of them "pass" while testing nothing. That happened. The
+ * served path must therefore BE the source directory -- /tmp/ghpages/
+ * energytech-mathquiz is a symlink to it -- and this checks that before the
+ * results are worth reading. */
+const SERVED = '/tmp/ghpages/energytech-mathquiz/app.js';
+try {
+  if (fs.realpathSync(SERVED) !== fs.realpathSync(APP)) {
+    console.log('The served app.js is not the source app.js:');
+    console.log('  served: ' + fs.realpathSync(SERVED));
+    console.log('  source: ' + fs.realpathSync(APP));
+    console.log('Browser mutations would patch a file nothing loads. Fix the server root first.');
+    process.exit(1);
+  }
+} catch (err) {
+  console.log('Cannot check what the server is serving (' + err.message + ').');
+  process.exit(1);
+}
+
 let caught = 0, survived = [];
 console.log('baseline:');
-for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js']) {
+for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js', 'test_exam_view.js']) {
   try {
     execFileSync('node', ['/tmp/energytech_app/' + suite], { stdio: 'pipe' });
     console.log(`  clean   ${suite}`);

@@ -986,3 +986,52 @@ a.list-pill {
 .retake-row > td { background: #f6f9fd; padding: 10px 14px; }
 .retake-table { margin: 0; background: transparent; }
 .retake-table td, .retake-table th { padding: 6px 10px; }
+
+/* ==========================================================================
+ * Exam mode: the trainee is sitting an assessment.
+ *
+ * Everything that is not the paper comes off the screen. The rules live in CSS
+ * rather than a pile of .hidden assignments so that leaving exam mode is one
+ * class removal and cannot leave a panel stranded.
+ * ========================================================================== */
+body.exam-mode .header-actions,
+body.exam-mode #traineeHomePanel,
+body.exam-mode #traineeLoginPanel,
+body.exam-mode footer { display: none !important; }
+
+body.exam-mode .app-header { padding-top: 14px; padding-bottom: 14px; }
+
+/* Who is sitting, what they are sitting, and how far along they are. */
+.exam-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 22px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--blue);
+  border-radius: 14px;
+  padding: 12px 16px;
+  box-shadow: 0 3px 12px rgba(21, 45, 85, .05);
+}
+.exam-head strong { display: block; color: var(--blue); font-size: 1.02rem; }
+.exam-meta { display: block; color: var(--muted); font-size: .86rem; font-weight: 500; margin-top: 2px; }
+.exam-who, .exam-what { min-width: 0; }
+.exam-progress {
+  margin-left: auto;
+  font-weight: 800;
+  color: var(--muted);
+  background: #f1f5fa;
+  border-radius: 999px;
+  padding: 7px 14px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.exam-progress .all-done { color: var(--good); }
+#examProgress.all-done { color: var(--good); }
+
+@media (max-width: 640px) {
+  .exam-head { gap: 8px 14px; padding: 10px 12px; }
+  .exam-progress { margin-left: 0; padding: 5px 11px; font-size: .9rem; }
+}
