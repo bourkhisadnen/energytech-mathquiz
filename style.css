@@ -915,6 +915,29 @@ a.list-pill {
   .history-table td { word-break: break-word; }
 }
 
+/* An exam whose marks are not out yet: listed so the trainee can see it was
+   recorded, but there is nothing to open. */
+.pending-tag {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  background: #e8edf3; color: var(--muted); font-size: .74rem; font-weight: 700;
+  white-space: nowrap;
+}
+.attempt-row.is-pending { cursor: default; color: var(--muted); }
+.attempt-row.is-pending:hover { background: transparent; }
+.attempt-row.is-pending .quiz-name { font-weight: 600; }
+
+.released-tag {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  background: #e6f4ea; color: #1c6b33; font-size: .74rem; font-weight: 700;
+  white-space: nowrap;
+}
+.shuffle-tag {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  background: #e7edfa; color: var(--blue); font-size: .68rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.sessions-table td { vertical-align: middle; }
+
 /* The whole row opens the attempt, so it has to look like it does. */
 .attempt-row { cursor: pointer; }
 .attempt-row:hover { background: #eef4fb; }
@@ -958,3 +981,8 @@ a.list-pill {
   .lesson-bars li { grid-template-columns: 1fr auto; }
   .lesson-bars .bar { grid-column: 1 / -1; }
 }
+
+/* "Who sat it", folded out under a session row. */
+.retake-row > td { background: #f6f9fd; padding: 10px 14px; }
+.retake-table { margin: 0; background: transparent; }
+.retake-table td, .retake-table th { padding: 6px 10px; }

@@ -29,6 +29,9 @@ const DEFAULT_SET = 'original_pdf';
 // Composite key of the quiz currently on screen (may come from a session rather
 // than the dropdowns, which is why it is tracked separately).
 let currentSetKey = null;
+// The per-launch arrangement seed for the paper on screen, '' when the paper is
+// in its plain order. Recorded with the attempt so the review can rebuild it.
+let currentOrderSeed = '';
 
 // Last dashboard payload from the backend. The page shows only the worst 20
 // attempts and 30 questions; CSV exports read this instead so they are complete.
@@ -951,9 +954,22 @@ function selectQuestionsFor(settings = {}) {
   const n = Math.max(0, Math.min(requested, bank.length));
   const seed = String(settings.seed || ($('seedInput') ? $('seedInput').value.trim() : '') || Date.now());
   const orderMode = settings.orderMode || ($('orderMode') ? $('orderMode').value : 'original');
+  // Two seeds, and the difference matters. `seed` belongs to the session and
+  // decides WHICH questions are on the paper, so every trainee sitting the same
+  // code gets the same questions and the exam is equally hard for all of them.
+  // `orderSeed` is per launch and decides only how they are arranged -- the
+  // order of the questions and the order of the four choices -- so the trainee
+  // at the next desk is looking at the same paper shuffled differently.
+  const orderSeed = settings.orderSeed ? String(settings.orderSeed) : '';
   const rng = seededRandom(seed);
   let selected = shuffle(bank, rng).slice(0, n);
-  if (orderMode === 'original') {
+  if (orderSeed) {
+    // Per-launch shuffling overrides the session's question-order setting.
+    // The instructor asked for a different arrangement per trainee; "keep the
+    // original order" would quietly cancel half of that and leave every paper
+    // in the same sequence with only the choices moved.
+    selected = shuffle(selected, seededRandom(orderSeed + '|order'));
+  } else if (orderMode === 'original') {
     // Group by paper first, so a cross-chapter quiz reads in a sensible order
     // instead of interleaving two papers that both number from 1.
     const order = allPapers().map(p => p.key);
@@ -961,14 +977,62 @@ function selectQuestionsFor(settings = {}) {
       (order.indexOf(a.__paper) - order.indexOf(b.__paper)) ||
       (a.original_number - b.original_number));
   } else {
+    // No order seed: keep drawing from the selection stream, exactly as every
+    // build before this one did. Attempts recorded then must still rebuild in
+    // the order they were sat, and a fresh stream here would silently reorder
+    // them under answers that no longer belong to them.
     selected = shuffle(selected, rng);
   }
-  return { setKey, selected, n };
+  if (orderSeed) selected = shuffleChoicesOf(selected, orderSeed);
+  return { setKey, selected, n, orderSeed };
+}
+
+/* Rearranges the four choices of each question and moves the answer letter with
+ * them, so everything downstream -- rendering, marking, what gets written to the
+ * Sheet -- goes on working in terms of the letters the trainee actually saw.
+ *
+ * Each question draws from its own stream, keyed by the question's identity
+ * rather than its position, so a question keeps its arrangement even if the
+ * order of the paper around it changes. */
+function shuffleChoicesOf(questions, orderSeed) {
+  return questions.map(q => {
+    const choices = splitChoices(q.choices);
+    if (choices.length < 2) return q;
+    const rng = seededRandom(`${orderSeed}|${q.__paper || ''}|${q.original_number}`);
+    const order = shuffle(choices.map((c, i) => i), rng);
+    const answerIndex = LETTERS.indexOf(String(q.answer || '').toLowerCase());
+    const moved = order.indexOf(answerIndex);
+    return Object.assign({}, q, {
+      choices: order.map(i => `\\item ${choices[i].text}`).join(' '),
+      answer: moved >= 0 ? LETTERS[moved] : q.answer
+    });
+  });
+}
+
+/* A fresh per-launch seed. Recorded with the attempt, which is the only reason
+ * the review can rebuild the paper this trainee saw rather than some other
+ * arrangement of the same questions. */
+function newOrderSeed() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function buildQuizFromSettings(settings = {}, target = 'teacher') {
-  const { setKey, selected, n } = selectQuestionsFor(settings);
+  // A fresh arrangement every time a trainee loads the code, which is the whole
+  // point: two trainees sitting side by side, and the same trainee reloading,
+  // never see the questions in the same order. The teacher's preview is left
+  // unshuffled -- it is the reference copy, and with this on there is no single
+  // paper for it to be a reference to.
+  const perLaunch = target === 'student'
+    && settings.mode === 'assessment'
+    && settings.shuffleEachLaunch
+    && !settings.orderSeed;
+  const withSeed = perLaunch
+    ? Object.assign({}, settings, { orderSeed: newOrderSeed() })
+    : settings;
+
+  const { setKey, selected, n, orderSeed } = selectQuestionsFor(withSeed);
   currentSetKey = setKey;
+  currentOrderSeed = orderSeed || '';
 
   currentQuiz = selected;
   lastFeedback = null;
@@ -1118,7 +1182,8 @@ function calculateScore(options = {}) {
     seed: (currentSession && currentSession.seed) || ($('seedInput') ? $('seedInput').value.trim() : ''),
     questionSet: setLabel,
     questionSetKey: setKey,
-    orderMode: (currentSession && currentSession.orderMode) || ($('orderMode') ? $('orderMode').value : 'original')
+    orderMode: (currentSession && currentSession.orderMode) || ($('orderMode') ? $('orderMode').value : 'original'),
+    orderSeed: currentOrderSeed
   };
   renderFeedback(target, reveal);
   return true;
@@ -1292,6 +1357,7 @@ function buildSubmissionPayload() {
       questionSetKey: lastFeedback.questionSetKey,
       seed: lastFeedback.seed,
       orderMode: lastFeedback.orderMode,
+      orderSeed: lastFeedback.orderSeed || '',
       questionCount: currentQuiz.length
     },
     score: {
@@ -1325,6 +1391,20 @@ async function submitOnlineResult(target = 'student') {
   }
 
   const mode = currentSession && currentSession.mode ? currentSession.mode : 'practice';
+
+  // Pressing Submit a second time used to post the whole sitting again as a
+  // separate attempt, because `studentSubmitted` was set but never read. The
+  // submission is opaque (no-cors), so a trainee who is unsure whether it went
+  // through is quite likely to press it again -- which is exactly how one
+  // sitting became two rows on the Sheet.
+  if (target === 'student' && studentSubmitted) {
+    if (feedbackEl) {
+      feedbackEl.className = 'feedback good';
+      feedbackEl.innerHTML = 'Your answers were already submitted. There is nothing more to send.';
+    }
+    return;
+  }
+
   const reveal = !(target === 'student' && mode === 'assessment');
   const ok = calculateScore({ target, requireAll: true, reveal });
   if (!ok) return;
@@ -1903,6 +1983,8 @@ function sessionPayloadFromInstructor() {
       intake,
       group,
       allowWalkIn: Boolean($('allowWalkIn') && $('allowWalkIn').checked),
+      shuffleEachLaunch: $('sessionMode').value === 'assessment'
+        && Boolean($('shuffleEachLaunch') && $('shuffleEachLaunch').checked),
       questionSetKey: key,
       questionSet: selectionLabel(key),
       questionCount: Number($('questionCount').value) || 30,
@@ -2116,17 +2198,37 @@ function getSessionByJsonp(url, code) {
   return getJsonp(url, { action: 'session', code }, 'energytechSession');
 }
 
-// One place to resolve a session code, used by the signed-in trainee path and
-// by the walk-in path. Returns null when the code is unknown.
-async function fetchSessionByCode(code) {
+/* One place to resolve a session code, used by the signed-in trainee path and by
+ * the walk-in path. Returns { session, sitting, offline } or null.
+ *
+ * The backend is asked first and the stored copy is only a fallback. It used to
+ * be the other way round, which was fine when the reply was just a definition;
+ * it is not fine now that it also says whether this trainee has already sat the
+ * exam, because a cached copy would happily hand out a second paper. `sitting`
+ * is null when the answer came from the cache, and the caller has to decide
+ * what to do about that -- for an exam, the answer is to refuse.
+ *
+ * Returns null only when the backend answered and did not know the code. If it
+ * could not be reached at all, { unreachable: true } comes back instead: those
+ * are different problems and "session not found" sends a trainee off retyping a
+ * code that was right all along. */
+async function fetchSessionByCode(code, token) {
+  const url = activeWebAppUrl();
+  if (url) {
+    try {
+      const params = token ? { action: 'session', code, token } : { action: 'session', code };
+      const data = await getJsonp(url, params, 'energytechSession');
+      if (data && data.ok && data.session) {
+        return { session: data.session, sitting: data.sitting || null, offline: false };
+      }
+      if (data && !data.ok) return null;
+    } catch { /* fall through to whatever is stored locally */ }
+  }
   const local = localStorage.getItem(`energytechSession_${code}`);
   if (local) {
-    try { return JSON.parse(local); } catch { /* fall through to the network */ }
+    try { return { session: JSON.parse(local), sitting: null, offline: true }; } catch { /* unusable */ }
   }
-  const url = activeWebAppUrl();
-  if (!url) return null;
-  const data = await getSessionByJsonp(url, code);
-  return (data && data.ok && data.session) ? data.session : null;
+  return { unreachable: true };
 }
 
 async function loadTraineeSession() {
@@ -2146,18 +2248,45 @@ async function loadTraineeSession() {
 
   status.className = 'feedback empty';
   status.innerHTML = 'Loading session...';
-  let session = null;
+  let found = null;
   try {
-    session = await fetchSessionByCode(code);
+    found = await fetchSessionByCode(code, traineeToken);
   } catch (err) {
     status.className = 'feedback bad';
     status.innerHTML = escapeHtml(err.message || String(err));
     return;
   }
 
-  if (!session) {
+  if (!found || found.unreachable) {
     status.className = 'feedback bad';
-    status.innerHTML = 'Session not found. Check the code and make sure the Google Apps Script URL is saved.';
+    status.innerHTML = found && found.unreachable
+      ? 'Cannot reach the server. Check your connection and try again \u2014 the code may be fine.'
+      : 'Session not found. Check the code and make sure the Google Apps Script URL is saved.';
+    if ($('studentQuizArea')) $('studentQuizArea').hidden = true;
+    return;
+  }
+
+  const session = found.session;
+  const isExam = (session.mode || 'practice') === 'assessment';
+
+  // An exam is one sitting. The paper is not drawn at all for a second one --
+  // seeing the questions again is itself worth something, released marks or not.
+  if (isExam && found.sitting && !found.sitting.maySit) {
+    status.className = 'feedback warn';
+    status.innerHTML = 'You have already sat this exam. '
+      + 'If something went wrong, ask your instructor to allow you another sitting.';
+    if ($('studentQuizArea')) $('studentQuizArea').hidden = true;
+    return;
+  }
+  // No answer from the backend means no way to know whether they have sat it.
+  // For practice that does not matter; for an exam, guessing is the one thing
+  // not to do.
+  if (isExam && !found.sitting) {
+    status.className = 'feedback bad';
+    status.innerHTML = found.offline
+      ? 'Cannot reach the server to check this exam. Connect to the internet and try again.'
+      : 'Cannot confirm your exam record right now. Try again, or tell your instructor.';
+    if ($('studentQuizArea')) $('studentQuizArea').hidden = true;
     return;
   }
 
@@ -3127,17 +3256,23 @@ async function startWalkIn() {
   if (!name || !group || !id) { warn('Enter your name, group and EnergyTech ID.'); return; }
 
   if (st) { st.className = 'feedback empty'; st.innerHTML = 'Checking the session…'; }
-  let session = null;
+  let found = null;
   try {
-    session = await fetchSessionByCode(code);
+    found = await fetchSessionByCode(code);
   } catch (err) {
     if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(err.message || String(err)); }
     return;
   }
-  if (!session) {
-    if (st) { st.className = 'feedback bad'; st.innerHTML = 'Session not found. Check the code with your instructor.'; }
+  if (!found || found.unreachable) {
+    if (st) {
+      st.className = 'feedback bad';
+      st.innerHTML = found && found.unreachable
+        ? 'Cannot reach the server. Check your connection and try again.'
+        : 'Session not found. Check the code with your instructor.';
+    }
     return;
   }
+  const session = found.session;
   // The instructor decides per session whether guests may sit it.
   if (!session.allowWalkIn) {
     if (st) {
@@ -3297,9 +3432,15 @@ function renderProfile(view) {
   const self = view.self;
   if (!self && $('profileCrumb')) $('profileCrumb').textContent = `${trainee.name || trainee.energytechId}`;
 
-  const done = attempts.length;
-  const avg = done ? Math.round(attempts.reduce((a, x) => a + x.percent, 0) / done) : 0;
-  const best = done ? Math.max(...attempts.map(x => x.percent)) : 0;
+  // An exam whose results the instructor has not released yet is listed, so the
+  // trainee can see it was recorded, but it carries no mark -- and it must not
+  // reach the averages either, or the mark could be worked back out of them.
+  const marked = attempts.filter(a => a.released !== false);
+  const held = attempts.length - marked.length;
+
+  const done = marked.length;
+  const avg = done ? Math.round(marked.reduce((a, x) => a + x.percent, 0) / done) : 0;
+  const best = done ? Math.max(...marked.map(x => x.percent)) : 0;
   const answered = lessons.reduce((a, l) => a + l.total, 0);
 
   // Only lessons with enough questions to mean anything, weakest first.
@@ -3349,7 +3490,10 @@ function renderProfile(view) {
               : 'No questions answered yet, so there is nothing to analyse.')}</p>`}
 
     <h4 class="profile-h">${self ? 'My quizzes' : 'History'}</h4>
-    ${done ? `<p class="hint">${self ? 'Tap a quiz to see every question and what you answered.' : 'Open a row to see the paper as it was answered.'}</p>
+    ${attempts.length ? `<p class="hint">${self
+        ? (held ? 'Tap a quiz to see every question and what you answered. Exams appear once your instructor releases the results.'
+                : 'Tap a quiz to see every question and what you answered.')
+        : 'Open a row to see the paper as it was answered.'}</p>
       <div class="table-wrap"><table class="dashboard-table history-table${self ? ' simple' : ''}">
         ${self
           ? '<thead><tr><th>When</th><th>Quiz</th><th>Score</th></tr></thead>'
@@ -3359,8 +3503,15 @@ function renderProfile(view) {
           const guest = a.registered && a.registered !== 'yes'
             ? '<span class="guest-tag" title="Sat as a guest, without logging in">guest</span>' : '';
           const mode = `<span class="mode-pill ${escapeHtml(a.mode || 'practice')}">${escapeHtml((a.mode || 'practice').toUpperCase())}</span>`;
-          const score = `<td class="score-cell"><strong class="${scoreBand(a.percent)}-text">${a.score} / ${a.total}</strong> <span class="hint">${a.percent}%</span></td>`;
-          const open = `<tr class="attempt-row" data-attempt="${escapeHtml(a.attemptId)}" tabindex="0" role="button">`;
+          const waiting = a.released === false;
+          const score = waiting
+            ? '<td class="score-cell"><span class="pending-tag">Not released yet</span></td>'
+            : `<td class="score-cell"><strong class="${scoreBand(a.percent)}-text">${a.score} / ${a.total}</strong> <span class="hint">${a.percent}%</span></td>`;
+          // A row with no mark has nothing to open, so it is neither clickable
+          // nor focusable -- a keyboard user should not land on a dead row.
+          const open = waiting
+            ? '<tr class="attempt-row is-pending">'
+            : `<tr class="attempt-row" data-attempt="${escapeHtml(a.attemptId)}" tabindex="0" role="button">`;
 
           // The trainee's own list leads with the session name -- the label
           // their instructor gave the sitting, which is what they will have
@@ -3393,6 +3544,157 @@ function renderProfile(view) {
       : `<p class="pane-empty">${self ? 'You have not sat a quiz yet. Once you do, it will appear here.' : 'This trainee has not sat a quiz yet.'}</p>`}`);
 }
 
+/* ==========================================================================
+ * Releasing exam results
+ *
+ * A practice quiz shows its mark the moment it is submitted. An exam does not:
+ * the mark sits on the Sheet, visible to the instructor, and reaches the
+ * trainees only when the instructor releases that session here.
+ * ========================================================================== */
+
+let sessionsCache = null;
+
+async function loadSessions() {
+  const st = $('sessionsStatus');
+  if (st) { st.className = 'feedback empty'; st.innerHTML = 'Loading&hellip;'; }
+  try {
+    const data = await rosterCall('session_list', { token: authToken }, 'energytechSessions', 1);
+    if (!data.ok) {
+      if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(data.error || 'Could not load your sessions.'); }
+      return;
+    }
+    sessionsCache = data.sessions || [];
+    renderSessions();
+    if (st) {
+      const exams = sessionsCache.filter(s => s.mode === 'assessment');
+      const waiting = exams.filter(s => !s.published && s.attempts > 0).length;
+      st.className = waiting ? 'feedback warn' : 'feedback good';
+      st.innerHTML = waiting
+        ? `${waiting} exam${waiting === 1 ? '' : 's'} with results not yet released.`
+        : `${sessionsCache.length} session${sessionsCache.length === 1 ? '' : 's'}.`;
+    }
+  } catch (err) {
+    if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(err.message || String(err)); }
+  }
+}
+
+function renderSessions() {
+  const el = $('sessionsList');
+  if (!el) return;
+  if (!sessionsCache || !sessionsCache.length) {
+    el.innerHTML = '<p class="pane-empty">No sessions yet. Create one above.</p>';
+    return;
+  }
+  el.innerHTML = `<div class="table-wrap"><table class="dashboard-table sessions-table">
+    <thead><tr><th>When</th><th>Session</th><th>Where</th><th>Mode</th><th>Sat</th><th>Results</th><th></th></tr></thead>
+    <tbody>${sessionsCache.map(s => {
+      const when = whenParts(s.timestamp);
+      const exam = s.mode === 'assessment';
+      return `<tr>
+        <td><span class="when-date">${escapeHtml(when.date)}</span>
+          <span class="when-time hint">${escapeHtml(when.time)}</span></td>
+        <td>${escapeHtml(s.sessionName || s.sessionCode)}
+          <br><span class="mono hint">${escapeHtml(s.sessionCode)}</span>
+          ${s.shuffleEachLaunch ? '<span class="shuffle-tag" title="Each trainee gets the same questions in a different order">shuffled</span>' : ''}</td>
+        <td>${escapeHtml(s.intake || '—')} / ${escapeHtml(s.group || '—')}</td>
+        <td><span class="mode-pill ${escapeHtml(s.mode || 'practice')}">${escapeHtml((s.mode || 'practice').toUpperCase())}</span></td>
+        <td>${s.attempts}</td>
+        <td>${!exam
+          ? '<span class="hint">Visible</span>'
+          : s.published
+            ? `<span class="released-tag">Released</span>`
+            : '<span class="pending-tag">Held back</span>'}</td>
+        <td class="row-actions">${exam
+          ? `<button type="button" class="icon-btn ${s.published ? 'unpublish-session' : 'publish-session'}"
+               data-code="${escapeHtml(s.sessionCode)}">${s.published ? 'Hide again' : 'Release results'}</button>
+             <button type="button" class="icon-btn who-sat" data-code="${escapeHtml(s.sessionCode)}">Who sat it</button>`
+          : ''}</td>
+      </tr>
+      ${retakePanel === s.sessionCode ? `<tr class="retake-row"><td colspan="7">
+        <div id="retakePanel">${renderRetakePanel(s.sessionCode)}</div>
+      </td></tr>` : ''}`;
+    }).join('')}</tbody></table></div>`;
+}
+
+/* Who has sat one exam, and a way to let one of them sit it again -- for the
+ * tablet that died mid-paper, which is the only reason this exists. */
+let retakePanel = '';
+let retakeData = null;
+
+function renderRetakePanel(code) {
+  if (!retakeData || retakeData.sessionCode !== code) return '<p class="pane-empty">Loading&hellip;</p>';
+  const list = retakeData.trainees || [];
+  if (!list.length) return '<p class="pane-empty">Nobody has sat this exam yet.</p>';
+  return `<table class="dashboard-table retake-table">
+    <thead><tr><th>Trainee</th><th>Sittings</th><th></th></tr></thead>
+    <tbody>${list.map(t => `
+      <tr>
+        <td>${escapeHtml(t.name || '(no name)')}<br><span class="mono hint">${escapeHtml(t.energytechId)}</span></td>
+        <td>${t.sat} of ${t.allowed}</td>
+        <td class="row-actions">${t.maySitAgain
+          ? '<span class="hint">May sit it now</span>'
+          : `<button type="button" class="icon-btn grant-retake"
+               data-code="${escapeHtml(code)}" data-id="${escapeHtml(t.energytechId)}">Allow another sitting</button>`}</td>
+      </tr>`).join('')}</tbody></table>`;
+}
+
+async function showWhoSat(code) {
+  retakePanel = code;
+  retakeData = null;
+  renderSessions();
+  try {
+    const data = await rosterCall('retake_list', { token: authToken, sessionCode: code }, 'energytechRetakes', 1);
+    retakeData = data.ok ? data : { sessionCode: code, trainees: [] };
+  } catch {
+    retakeData = { sessionCode: code, trainees: [] };
+  }
+  renderSessions();
+}
+
+async function grantRetake(code, energytechId) {
+  const st = $('sessionsStatus');
+  try {
+    const data = await rosterCall('retake_allow',
+      { token: authToken, sessionCode: code, energytechId }, 'energytechRetake', 1);
+    if (!data.ok) {
+      if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(data.error || 'Could not allow that.'); }
+      return;
+    }
+    if (st) {
+      st.className = 'feedback good';
+      st.innerHTML = `<strong>${escapeHtml(energytechId)}</strong> may sit ${escapeHtml(code)} once more.`;
+    }
+    showWhoSat(code);
+  } catch (err) {
+    if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(err.message || String(err)); }
+  }
+}
+
+async function setSessionPublished(code, release) {
+  const st = $('sessionsStatus');
+  try {
+    const data = await rosterCall(release ? 'session_publish' : 'session_unpublish',
+      { token: authToken, sessionCode: code }, 'energytechPublish', 1);
+    if (!data.ok) {
+      if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(data.error || 'Could not change that session.'); }
+      return;
+    }
+    // Redraw from the local copy immediately, then reconcile in the background,
+    // so the button responds at once instead of after a round trip.
+    const row = (sessionsCache || []).find(s => s.sessionCode === code);
+    if (row) { row.published = Boolean(release); renderSessions(); }
+    if (st) {
+      st.className = 'feedback good';
+      st.innerHTML = release
+        ? `Results for <strong>${escapeHtml(code)}</strong> are now visible to that group.`
+        : `Results for <strong>${escapeHtml(code)}</strong> are hidden from trainees again.`;
+    }
+    loadSessions();
+  } catch (err) {
+    if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(err.message || String(err)); }
+  }
+}
+
 /* ---------------- one attempt, question by question ---------------- */
 
 async function openAttempt(view, attemptId) {
@@ -3422,7 +3724,11 @@ function rebuildAttemptQuestions(attempt) {
       questionSetKey: attempt.questionSetKey,
       questionCount: attempt.questionCount,
       seed: attempt.seed,
-      orderMode: attempt.orderMode
+      orderMode: attempt.orderMode,
+      // Present only on a shuffled-per-launch exam. It restores both the order
+      // of the questions and the order of each question's choices, so "you
+      // answered (c)" points at the option that was (c) on the day.
+      orderSeed: attempt.orderSeed || ''
     });
     return selected;
   } catch { return []; }
@@ -3800,7 +4106,11 @@ function wireRosterUi() {
     if (!pane) return;
     const open = t => {
       const row = t.closest('.open-attempt') || t.closest('.attempt-row');
-      if (row) { openAttempt(view, row.dataset.attempt); return true; }
+      // A row with no attempt id has nothing behind it: an exam whose marks are
+      // not out yet. Without this the click would blank the list and leave an
+      // error message where it was.
+      if (row && row.dataset.attempt) { openAttempt(view, row.dataset.attempt); return true; }
+      if (row) return true;
       if (t.closest('.back-to-profile')) {
         if (view.data) renderProfile(view);
         return true;
@@ -3817,6 +4127,38 @@ function wireRosterUi() {
         open(e.target);
       }
     });
+  }
+
+  /* --- releasing exam results --- */
+  if ($('loadSessionsBtn')) $('loadSessionsBtn').addEventListener('click', loadSessions);
+  if ($('sessionsList')) $('sessionsList').addEventListener('click', e => {
+    if (!e.target || !e.target.closest) return;
+    const pub = e.target.closest('.publish-session');
+    if (pub) { setSessionPublished(pub.dataset.code, true); return; }
+    const un = e.target.closest('.unpublish-session');
+    if (un) { setSessionPublished(un.dataset.code, false); return; }
+    const who = e.target.closest('.who-sat');
+    if (who) {
+      // Clicking it again folds the panel away.
+      if (retakePanel === who.dataset.code) { retakePanel = ''; retakeData = null; renderSessions(); }
+      else showWhoSat(who.dataset.code);
+      return;
+    }
+    const grant = e.target.closest('.grant-retake');
+    if (grant) { grantRetake(grant.dataset.code, grant.dataset.id); return; }
+  });
+
+  // The per-launch shuffle is an exam measure, so the box only appears when the
+  // session is an exam -- and is cleared when it is not, so a mode switched back
+  // to practice cannot leave a stale tick behind.
+  if ($('sessionMode')) {
+    const syncShuffleRow = () => {
+      const exam = $('sessionMode').value === 'assessment';
+      if ($('shuffleEachLaunchRow')) $('shuffleEachLaunchRow').hidden = !exam;
+      if (!exam && $('shuffleEachLaunch')) $('shuffleEachLaunch').checked = false;
+    };
+    $('sessionMode').addEventListener('change', syncShuffleRow);
+    syncShuffleRow();
   }
 
   if ($('profileBackBtn')) $('profileBackBtn').addEventListener('click', showRoster);

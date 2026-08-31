@@ -25,6 +25,7 @@ const SHEET_INSTRUCTORS = 'Instructors';
 const SHEET_INTAKES = 'Intakes';
 const SHEET_GROUPS = 'Groups';
 const SHEET_TRAINEES = 'Trainees';
+const SHEET_RETAKES = 'Retakes';
 
 // Bootstrap admin account. Change ADMIN_DEFAULT_PASSWORD here before your
 // first deployment if you can, and change it again from inside the app
@@ -47,7 +48,7 @@ function setup() {
     'Question Set', 'Question Set Key', 'Seed', 'Question Count',
     'Order Mode', 'Show Original Numbers', 'Require All',
     'Owner Username', 'Owner Display Name',
-    'Intake', 'Allow Walk-In'
+    'Intake', 'Allow Walk-In', 'Shuffle Each Launch', 'Results Published'
   ]);
 
   let attempts = ss.getSheetByName(SHEET_ATTEMPTS);
@@ -59,7 +60,7 @@ function setup() {
     'Question Set', 'Question Set Key', 'Seed', 'Question Count', 'Order Mode',
     'Score', 'Total', 'Percentage', 'Wrong Questions', 'Unanswered Questions',
     'User Agent', 'Owner Username', 'Owner Display Name',
-    'Intake', 'Registered'
+    'Intake', 'Registered', 'Order Seed'
   ]);
 
   let items = ss.getSheetByName(SHEET_ITEMS);
@@ -98,8 +99,12 @@ function doPost(e) {
       SpreadsheetApp.flush();
       return json_(out);
     }
-    saveAttempt_(payload);
+    // saveAttempt_ can refuse -- a second sitting of an exam. The browser posts
+    // no-cors and cannot read this, but returning the refusal rather than a
+    // blanket ok keeps the reply honest for anything that can.
+    const saved = saveAttempt_(payload);
     SpreadsheetApp.flush();
+    if (saved && saved.ok === false) return json_(saved);
     return json_({ ok: true, type: 'quiz_attempt' });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
@@ -114,7 +119,7 @@ function doGet(e) {
     if (params.action === 'summary') {
       data = buildSummary_(params);
     } else if (params.action === 'session') {
-      data = getSession_(params.code || '');
+      data = getSession_(params.code || '', params.token || '');
     } else if (params.action === 'ping') {
       data = { ok: true, message: 'EnergyTech Quiz backend is running.' };
     } else if (params.action === 'auth_signup') {
@@ -155,6 +160,16 @@ function doGet(e) {
       data = myHistory_(params);
     } else if (params.action === 'my_attempt') {
       data = myAttempt_(params);
+    } else if (params.action === 'session_list') {
+      data = sessionList_(params);
+    } else if (params.action === 'session_publish') {
+      data = sessionPublish_(params, true);
+    } else if (params.action === 'session_unpublish') {
+      data = sessionPublish_(params, false);
+    } else if (params.action === 'retake_allow') {
+      data = retakeAllow_(params);
+    } else if (params.action === 'retake_list') {
+      data = retakeList_(params);
     } else if (params.action === 'trainee_move') {
       data = traineeMove_(params);
     } else if (params.action === 'trainee_set_account') {
@@ -485,6 +500,9 @@ const INTAKE_HEADERS  = ['Timestamp', 'Label', 'Status', 'Created By'];
 const GROUP_HEADERS   = ['Timestamp', 'Intake', 'Group', 'Created By'];
 /* One Name column rather than Family + Given: Saudi names run
  * given-father-grandfather-family and do not split cleanly in two. */
+/* One row per retake granted. A row is a permission to sit an exam once more;
+ * it is spent by being used, not deleted. */
+const RETAKE_HEADERS  = ['Timestamp', 'Session Code', 'EnergyTech ID', 'Granted By'];
 const TRAINEE_HEADERS = ['Timestamp', 'EnergyTech ID', 'Name',
                          'Intake', 'Group', 'Account Status', 'Password Hash', 'Salt',
                          'Token', 'Token Expires', 'Created By'];
@@ -539,6 +557,95 @@ function rosterSheet_(name, headers) {
 function intakesSheet_()  { return rosterSheet_(SHEET_INTAKES, INTAKE_HEADERS); }
 function groupsSheet_()   { return rosterSheet_(SHEET_GROUPS, GROUP_HEADERS); }
 function traineesSheet_() { return rosterSheet_(SHEET_TRAINEES, TRAINEE_HEADERS); }
+function retakesSheet_()  { return rosterSheet_(SHEET_RETAKES, RETAKE_HEADERS); }
+
+/* ------------------------- one sitting per exam --------------------------- */
+
+/* How many times this trainee has submitted this session, and how many sittings
+ * they are entitled to: one, plus one for each retake the instructor has
+ * granted. Counting grants rather than flipping a flag means a grant is spent
+ * by being used, so "let them sit it again" cannot quietly become "let them sit
+ * it as often as they like". */
+function sittingsFor_(code, id) {
+  code = String(code || '').toUpperCase().trim();
+  id = normId_(id);
+  if (!code || !id) return { sat: 0, allowed: 1, maySit: true };
+
+  let sat = 0;
+  rowsOf_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_ATTEMPTS)).forEach(row => {
+    if (String(row[5] || '').toUpperCase().trim() === code && normId_(row[4]) === id) sat++;
+  });
+  let granted = 0;
+  rowsOf_(retakesSheet_()).forEach(row => {
+    if (String(row[1] || '').toUpperCase().trim() === code && normId_(row[2]) === id) granted++;
+  });
+  return { sat: sat, allowed: 1 + granted, maySit: sat < 1 + granted };
+}
+
+/* Exams only. A practice quiz may be sat as often as the trainee likes -- that
+ * is what practice is for. Returns null when the sitting is allowed. */
+function examBlocked_(code, id, mode) {
+  if (String(mode || '').toLowerCase() !== 'assessment') return null;
+  if (!normId_(id)) return null;             // a guest has no roster identity
+  const s = sittingsFor_(code, id);
+  return s.maySit ? null : s;
+}
+
+function retakeAllow_(params) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  ensureSheets_();
+
+  const code = String(params.sessionCode || '').toUpperCase().trim();
+  const id = normId_(params.energytechId);
+  if (!code || !id) return { ok: false, error: 'Name both the session and the trainee.' };
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SESSIONS);
+  const rowNumber = sessionRowNumber_(sheet, code);
+  if (!rowNumber) return { ok: false, error: 'Session ' + code + ' not found.' };
+  const owner = normalizeUsername_(sheet.getRange(rowNumber, 13).getValue());
+  if (auth.instructor.role !== 'admin' && owner !== normalizeUsername_(auth.instructor.username)) {
+    return { ok: false, error: 'That session belongs to another instructor.' };
+  }
+  if (!findTraineeRow_(traineesSheet_(), id)) {
+    return { ok: false, error: 'Trainee ' + id + ' is not on the roster.' };
+  }
+
+  appendTextRow_(retakesSheet_(), [new Date(), code, id, auth.instructor.username], [2, 3]);
+  SpreadsheetApp.flush();
+  const s = sittingsFor_(code, id);
+  return { ok: true, sessionCode: code, energytechId: id, sat: s.sat, allowed: s.allowed };
+}
+
+/* Who has sat this session, and who is free to sit it again. */
+function retakeList_(params) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  ensureSheets_();
+
+  const code = String(params.sessionCode || '').toUpperCase().trim();
+  if (!code) return { ok: false, error: 'No session named.' };
+
+  const byId = {};
+  rowsOf_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_ATTEMPTS)).forEach(row => {
+    if (String(row[5] || '').toUpperCase().trim() !== code) return;
+    const id = normId_(row[4]);
+    if (!id) return;
+    if (!byId[id]) byId[id] = { energytechId: id, name: String(row[2] || ''), sat: 0, allowed: 1 };
+    byId[id].sat++;
+  });
+  rowsOf_(retakesSheet_()).forEach(row => {
+    if (String(row[1] || '').toUpperCase().trim() !== code) return;
+    const id = normId_(row[2]);
+    if (!byId[id]) byId[id] = { energytechId: id, name: '', sat: 0, allowed: 1 };
+    byId[id].allowed++;
+  });
+  const list = Object.keys(byId).map(k => {
+    byId[k].maySitAgain = byId[k].sat < byId[k].allowed;
+    return byId[k];
+  }).sort((a, b) => a.energytechId.localeCompare(b.energytechId));
+  return { ok: true, sessionCode: code, trainees: list };
+}
 
 function normLabel_(x) { return String(x || '').trim().toUpperCase(); }
 function normId_(x)    { return String(x || '').trim().toUpperCase(); }
@@ -1022,11 +1129,45 @@ function saveSession_(s, owner) {
     (owner && owner.username) || '',
     (owner && owner.displayName) || '',
     s.intake || '',
-    s.allowWalkIn === true
+    s.allowWalkIn === true,
+    s.shuffleEachLaunch === true,
+    ''                       // Results Published -- set later, by the instructor
   ], [2, 3, 4, 15]);
 }
 
-function getSession_(code) {
+/* The latest row for a session code. Saving a session appends rather than
+ * overwrites, so "the session" is always the last row bearing the code. */
+function sessionRowNumber_(sheet, code) {
+  code = String(code || '').toUpperCase().trim();
+  if (!code) return 0;
+  const values = sheet.getDataRange().getValues();
+  for (let r = values.length - 1; r >= 1; r--) {
+    if (String(values[r][1]).toUpperCase().trim() === code) return r + 1;
+  }
+  return 0;
+}
+
+/* Session code -> whether its results have been released to the trainees.
+ * Read once per request; a doGet touches this for every attempt row. */
+function publishedByCode_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SESSIONS);
+  const out = {};
+  if (!sheet) return out;
+  const values = sheet.getDataRange().getValues();
+  for (let r = 1; r < values.length; r++) {
+    const code = String(values[r][1] || '').toUpperCase().trim();
+    if (!code) continue;
+    // Later rows win: re-saving a session supersedes the earlier row, and with
+    // it any release. That is deliberate -- a re-saved exam is a new exam.
+    out[code] = Boolean(values[r][17]);
+  }
+  return out;
+}
+
+/* `token`, when a signed-in trainee is asking, lets the reply say whether they
+ * have already sat this exam -- so the app can refuse before drawing a paper
+ * rather than after they have answered it. */
+function getSession_(code, token) {
   ensureSheets_();
   code = String(code || '').toUpperCase().trim();
   if (!code) return { ok: false, error: 'Missing session code.' };
@@ -1038,13 +1179,27 @@ function getSession_(code) {
   for (let r = values.length - 1; r >= 1; r--) {
     const row = values[r];
     if (String(row[1]).toUpperCase().trim() === code) {
+      const mode = String(row[4] || 'practice');
+      let sitting = null;
+      if (token) {
+        const who = requireTrainee_({ token: token });
+        if (who.ok) {
+          const s = sittingsFor_(code, who.trainee.energytechId);
+          sitting = {
+            sat: s.sat,
+            allowed: s.allowed,
+            maySit: mode.toLowerCase() !== 'assessment' ? true : s.maySit
+          };
+        }
+      }
       return {
         ok: true,
+        sitting: sitting,
         session: {
           sessionCode: String(row[1] || ''),
           sessionName: String(row[2] || ''),
           group: String(row[3] || ''),
-          mode: String(row[4] || 'practice'),
+          mode: mode,
           questionSet: String(row[5] || ''),
           questionSetKey: String(row[6] || ''),
           seed: String(row[7] || ''),
@@ -1053,9 +1208,11 @@ function getSession_(code) {
           showOriginalNumbers: row[10] !== false,
           requireAll: row[11] !== false,
           intake: String(row[14] || ''),
-          // A session made before these two columns existed has no flag, and
-          // guests stay locked out of it -- which is the safe default.
-          allowWalkIn: row[15] === true || String(row[15]).toUpperCase() === 'TRUE'
+          // A session made before these columns existed has no flag, and guests
+          // stay locked out of it -- which is the safe default.
+          allowWalkIn: row[15] === true || String(row[15]).toUpperCase() === 'TRUE',
+          shuffleEachLaunch: row[16] === true || String(row[16]).toUpperCase() === 'TRUE',
+          resultsPublished: Boolean(row[17])
         }
       };
     }
@@ -1115,6 +1272,20 @@ function saveAttempt_(p) {
     }
   }
 
+  // The app refuses to draw a second exam paper, but that is the browser's
+  // opinion and the browser is not to be trusted. This is where it actually
+  // holds: a second submission for an exam already sat is not written, whatever
+  // sent it. A trainee mid-exam is unaffected -- they have no attempt yet.
+  const blocked = examBlocked_(
+    sessionCode,
+    identity.registered === 'yes' ? identity.energytechId : '',
+    quiz.mode || session.mode || ''
+  );
+  if (blocked) {
+    return { ok: false, error: 'This exam has already been submitted for '
+      + identity.energytechId + '. Ask your instructor to allow another sitting.' };
+  }
+
   appendTextRow_(attempts, [
     timestamp,
     attemptId,
@@ -1138,8 +1309,12 @@ function saveAttempt_(p) {
     owner.username,
     owner.displayName,
     identity.intake,
-    identity.registered
-  ], [3, 4, 5, 6, 22]);
+    identity.registered,
+    // The per-launch seed. The session seed picks WHICH questions; this one
+    // picks the order they and their choices were shown in, and without it the
+    // review could not rebuild the paper this trainee actually saw.
+    quiz.orderSeed || ''
+  ], [3, 4, 5, 6, 22, 24]);
 
   const rows = (p.items || []).map(item => [
     timestamp,
@@ -1177,29 +1352,43 @@ function saveAttempt_(p) {
  * record passes one that allows everything, because their history is theirs no
  * matter who ran the session. Both routes share this body so that a change to
  * the lesson analysis can never apply to one and not the other. */
-function historyFor_(id, mine) {
+function historyFor_(id, mine, gateResults) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   const found = findTraineeRow_(traineesSheet_(), id);
   const trainee = found ? traineePublic_(found.row) : { energytechId: id, name: '', intake: '', group: '', accountStatus: 'none' };
 
+  const published = gateResults ? publishedByCode_() : null;
+  const withheld = {};          // attempt ids whose marks are not out yet
+
   const attempts = [];
   rowsOf_(ss.getSheetByName(SHEET_ATTEMPTS)).forEach(row => {
     if (normId_(row[4]) !== id || !mine(row[19])) return;
+    const attemptId = String(row[1] || '');
+    const code = String(row[5] || '').toUpperCase().trim();
+    const isExam = String(row[7] || '').toLowerCase() === 'assessment';
+    const hold = Boolean(gateResults && isExam && !published[code]);
+    if (hold) withheld[attemptId] = true;
+
     attempts.push({
       timestamp: row[0] instanceof Date ? row[0].toISOString() : String(row[0] || ''),
-      attemptId: String(row[1] || ''),
+      // No id on a withheld row: there is nothing to open, and handing out the
+      // id would only invite a request the backend is going to refuse anyway.
+      attemptId: hold ? '' : attemptId,
       sessionCode: String(row[5] || ''),
       sessionName: String(row[6] || ''),
       mode: String(row[7] || ''),
       questionSet: String(row[8] || ''),
-      questionSetKey: String(row[9] || ''),
-      seed: String(row[10] || ''),
+      questionSetKey: hold ? '' : String(row[9] || ''),
+      seed: hold ? '' : String(row[10] || ''),
       questionCount: Number(row[11] || 0),
-      orderMode: String(row[12] || 'original'),
-      score: Number(row[13] || 0),
-      total: Number(row[14] || 0),
-      percent: Number(row[15] || 0),
+      orderMode: hold ? '' : String(row[12] || 'original'),
+      orderSeed: hold ? '' : String(row[23] || ''),
+      // The mark itself, and everything it could be reconstructed from.
+      score: hold ? null : Number(row[13] || 0),
+      total: hold ? null : Number(row[14] || 0),
+      percent: hold ? null : Number(row[15] || 0),
+      released: !hold,
       // A guest sitting types their own ID, so a walk-in row can land on a real
       // trainee's record. It is still a paper sat under that ID, so it is shown
       // rather than hidden -- but it is labelled, so nobody has to guess why an
@@ -1210,9 +1399,12 @@ function historyFor_(id, mine) {
   attempts.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
 
   // Lesson tallies come from the item rows, which carry the lesson per question.
+  // An unreleased exam must not feed them: "you are at 40% on lesson 1-1.1"
+  // gives away the mark just as surely as printing it would.
   const tally = {};
   rowsOf_(ss.getSheetByName(SHEET_ITEMS)).forEach(row => {
     if (normId_(row[4]) !== id || !mine(row[17])) return;
+    if (withheld[String(row[1] || '')]) return;
     const lesson = String(row[13] || '').trim();
     if (!lesson) return;
     if (!tally[lesson]) tally[lesson] = { lesson: lesson, correct: 0, total: 0 };
@@ -1236,15 +1428,18 @@ function traineeHistory_(params) {
 
   const isAdmin = auth.instructor.role === 'admin';
   const viewer = normalizeUsername_(auth.instructor.username);
-  return historyFor_(id, owner => isAdmin || normalizeUsername_(owner) === viewer);
+  // No gate: the instructor is the one who decides when marks go out, so they
+  // see every mark whether it has been released or not.
+  return historyFor_(id, owner => isAdmin || normalizeUsername_(owner) === viewer, false);
 }
 
 /* A trainee reading their own record. The identity comes from the token, never
- * from a parameter, so there is no id to tamper with. */
+ * from a parameter, so there is no id to tamper with. Exam marks are gated on
+ * the instructor having released that session. */
 function myHistory_(params) {
   const auth = requireTrainee_(params);
   if (!auth.ok) return auth;
-  return historyFor_(normId_(auth.trainee.energytechId), function () { return true; });
+  return historyFor_(normId_(auth.trainee.energytechId), function () { return true; }, true);
 }
 
 /* Every question of one attempt, so it can be shown back the way the trainee
@@ -1276,7 +1471,8 @@ function attemptFor_(attemptId, allow) {
       total: Number(row[14] || 0),
       percent: Number(row[15] || 0),
       intake: String(row[21] || ''),
-      registered: String(row[22] || '')
+      registered: String(row[22] || ''),
+      orderSeed: String(row[23] || '')
     };
   });
   if (!attempt) return { ok: false, error: 'That attempt is not on record, or belongs to someone else.' };
@@ -1310,7 +1506,8 @@ function attemptDetail_(params) {
 }
 
 /* A trainee opening one of their own attempts. The row's EnergyTech ID must be
- * theirs -- knowing or guessing an attempt id is not enough. */
+ * theirs -- knowing or guessing an attempt id is not enough -- and an exam whose
+ * results the instructor has not released stays shut, however it is asked for. */
 function myAttempt_(params) {
   const auth = requireTrainee_(params);
   if (!auth.ok) return auth;
@@ -1318,7 +1515,98 @@ function myAttempt_(params) {
   if (!attemptId) return { ok: false, error: 'No attempt named.' };
 
   const me = normId_(auth.trainee.energytechId);
-  return attemptFor_(attemptId, row => normId_(row[4]) === me);
+  const published = publishedByCode_();
+  let held = false;
+  const res = attemptFor_(attemptId, function (row) {
+    if (normId_(row[4]) !== me) return false;
+    if (String(row[7] || '').toLowerCase() === 'assessment'
+        && !published[String(row[5] || '').toUpperCase().trim()]) {
+      held = true;
+      return false;
+    }
+    return true;
+  });
+  if (held) {
+    return { ok: false, error: 'Your instructor has not released the results of this exam yet.' };
+  }
+  return res;
+}
+
+/* --------------------------- releasing exam marks ------------------------- */
+
+/* Every session this instructor owns, newest first, with how many trainees have
+ * sat it and whether its marks are out. */
+function sessionList_(params) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  ensureSheets_();
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const isAdmin = auth.instructor.role === 'admin';
+  const viewer = normalizeUsername_(auth.instructor.username);
+
+  const sat = {};
+  rowsOf_(ss.getSheetByName(SHEET_ATTEMPTS)).forEach(row => {
+    const code = String(row[5] || '').toUpperCase().trim();
+    if (code) sat[code] = (sat[code] || 0) + 1;
+  });
+
+  // Only the latest row per code: re-saving a session supersedes the earlier one.
+  const seen = {};
+  const sessions = [];
+  const values = rowsOf_(ss.getSheetByName(SHEET_SESSIONS));
+  for (let i = values.length - 1; i >= 0; i--) {
+    const row = values[i];
+    const code = String(row[1] || '').toUpperCase().trim();
+    if (!code || seen[code]) continue;
+    seen[code] = true;
+    if (!isAdmin && normalizeUsername_(row[12]) !== viewer) continue;
+    sessions.push({
+      timestamp: row[0] instanceof Date ? row[0].toISOString() : String(row[0] || ''),
+      sessionCode: code,
+      sessionName: String(row[2] || ''),
+      group: String(row[3] || ''),
+      intake: String(row[14] || ''),
+      mode: String(row[4] || 'practice'),
+      questionSet: String(row[5] || ''),
+      shuffleEachLaunch: row[16] === true || String(row[16]).toUpperCase() === 'TRUE',
+      published: Boolean(row[17]),
+      publishedAt: row[17] instanceof Date ? row[17].toISOString() : String(row[17] || ''),
+      attempts: sat[code] || 0,
+      owner: String(row[13] || '')
+    });
+  }
+  sessions.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+  return { ok: true, sessions: sessions };
+}
+
+function sessionPublish_(params, release) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  ensureSheets_();
+
+  const code = String(params.sessionCode || '').toUpperCase().trim();
+  if (!code) return { ok: false, error: 'No session named.' };
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SESSIONS);
+  const rowNumber = sessionRowNumber_(sheet, code);
+  if (!rowNumber) return { ok: false, error: 'Session ' + code + ' not found.' };
+
+  const owner = normalizeUsername_(sheet.getRange(rowNumber, 13).getValue());
+  const isAdmin = auth.instructor.role === 'admin';
+  if (!isAdmin && owner !== normalizeUsername_(auth.instructor.username)) {
+    return { ok: false, error: 'That session belongs to another instructor.' };
+  }
+
+  const when = release ? new Date() : '';
+  sheet.getRange(rowNumber, 18).setValue(when);
+  SpreadsheetApp.flush();
+  return {
+    ok: true,
+    sessionCode: code,
+    published: Boolean(release),
+    publishedAt: release ? when.toISOString() : ''
+  };
 }
 
 function buildSummary_(params) {
@@ -1444,13 +1732,15 @@ function ensureSheets_() {
   }
   getOrCreateInstructorsSheet_();
   const attemptsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_ATTEMPTS);
-  if (attemptsSheet) ensureHeaders_(attemptsSheet, ['Intake', 'Registered']);
+  if (attemptsSheet) ensureHeaders_(attemptsSheet, ['Intake', 'Registered', 'Order Seed']);
   const sessionsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SESSIONS);
-  if (sessionsSheet) ensureHeaders_(sessionsSheet, ['Intake', 'Allow Walk-In']);
+  if (sessionsSheet) ensureHeaders_(sessionsSheet,
+    ['Intake', 'Allow Walk-In', 'Shuffle Each Launch', 'Results Published']);
   intakesSheet_();
   groupsSheet_();
   migrateTraineeNames_();          // must precede traineesSheet_'s header check
   traineesSheet_();
+  retakesSheet_();
 }
 
 function json_(obj) {
