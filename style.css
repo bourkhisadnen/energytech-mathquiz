@@ -1035,3 +1035,7 @@ body.exam-mode .app-header { padding-top: 14px; padding-bottom: 14px; }
   .exam-head { gap: 8px 14px; padding: 10px 12px; }
   .exam-progress { margin-left: 0; padding: 5px 11px; font-size: .9rem; }
 }
+
+/* A handed-in exam: the buttons are gone, so the panel is just the receipt. */
+.result-panel.exam-done h2 { display: none; }
+.result-panel.exam-done .button-row { display: none; }

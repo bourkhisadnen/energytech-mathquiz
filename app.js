@@ -1047,6 +1047,8 @@ function buildQuizFromSettings(settings = {}, target = 'teacher') {
   // An exam clears the screen of everything but the trainee's own details and
   // the paper: no session box, no history, no navigation to wander off into.
   setExamMode(target === 'student' && mode === 'assessment');
+  // A new paper needs its buttons back, whatever the last one did to them.
+  if (target === 'student') restoreQuizButtons();
 
   const summaryEl = target === 'student' ? $('studentQuizSummary') : $('quizSummary');
   const containerEl = target === 'student' ? $('studentQuizContainer') : $('quizContainer');
@@ -1113,6 +1115,61 @@ function examHeaderHtml(n) {
       </div>
       <div class="exam-progress"><span id="examProgress">0 of ${n} answered</span></div>
     </div>`;
+}
+
+/* An exam is over when it is handed in. The paper comes off the screen and the
+ * buttons that would act on it go with it, so there is nothing left to clear,
+ * re-answer, or submit a second time. */
+function retireExamPaper() {
+  currentQuiz = [];
+  const container = $('studentQuizContainer');
+  if (container) container.innerHTML = '';
+  const summary = $('studentQuizSummary');
+  if (summary) summary.innerHTML = '';
+  ['studentSubmitBtn', 'studentClearBtn', 'studentDownloadResultBtn'].forEach(id => {
+    const el = $(id);
+    if (el) el.hidden = true;
+  });
+  const panel = $('studentResultPanel');
+  if (panel) panel.classList.add('exam-done');
+}
+
+/* Undoes the above when a fresh paper is drawn. */
+function restoreQuizButtons() {
+  ['studentSubmitBtn', 'studentClearBtn'].forEach(id => {
+    const el = $(id);
+    if (el) el.hidden = false;
+  });
+  const panel = $('studentResultPanel');
+  if (panel) panel.classList.remove('exam-done');
+  syncResultDownload();
+}
+
+/* Reads the record back after an exam submission. The POST is opaque, so this
+ * is the only way to tell the trainee something true: their entitlement is one
+ * sitting, so once it has registered the backend stops offering them the paper.
+ * If it still would, nothing was written. */
+async function confirmExamRecorded(code) {
+  const el = $('studentFeedback');
+  if (!code || !el) return;
+  await new Promise(r => setTimeout(r, 1800));   // let the Sheet finish writing
+  let found = null;
+  try { found = await fetchSessionByCode(code, traineeToken); } catch { /* below */ }
+
+  if (found && found.sitting && found.sitting.maySit === false) {
+    el.innerHTML += '<p class="good"><strong>Recorded.</strong> Your instructor will release the'
+      + ' result; it will then appear under <strong>My results</strong>.</p>';
+    return;
+  }
+  if (found && found.sitting) {
+    el.className = 'feedback bad';
+    el.innerHTML = '<strong>Your answers may not have been recorded.</strong> '
+      + 'Do not leave — tell your instructor now, before anyone closes this page.';
+    return;
+  }
+  // Could not check at all: say that, rather than claiming either outcome.
+  el.innerHTML += '<p class="warn">Could not confirm with the server that this was recorded.'
+    + ' Please check with your instructor.</p>';
 }
 
 /* Answered-so-far, updated as they go. Without it the only way to know whether
@@ -1323,6 +1380,19 @@ function renderFeedback(target = 'teacher', reveal = true) {
 }
 
 function clearAnswers(target = activeRole || 'teacher') {
+  // Clearing used to reset `studentSubmitted`, which unlocked Submit again: a
+  // trainee could hand in an exam, clear it, re-answer and submit a second
+  // time. The backend refused the write, but the app still said "submitted
+  // successfully" -- a false confirmation over a mark that was never changed.
+  // The paper is taken away at submission now; this is the rule behind that.
+  if (target === 'student' && studentSubmitted && examSessionActive()) {
+    const el = $('studentFeedback');
+    if (el) {
+      el.className = 'feedback warn';
+      el.innerHTML = 'This exam has been handed in. It cannot be cleared or answered again.';
+    }
+    return;
+  }
   const root = target === 'student' ? $('studentQuizArea') : $('teacherPreviewArea');
   const scope = root || document;
   scope.querySelectorAll('input[type="radio"]').forEach(el => { el.checked = false; });
@@ -1504,16 +1574,26 @@ async function submitOnlineResult(target = 'student') {
     });
     studentSubmitted = true;
     if (target === 'student') {
+      const wasExam = examSessionActive();
+      const code = (currentSession && currentSession.sessionCode) || '';
       renderFeedback('student', reveal);
       if (mode === 'practice') {
         $('studentFeedback').innerHTML += `<p class="good"><strong>Result submitted online.</strong></p>`;
       }
+      // An exam is over the moment it is handed in. Taking the paper away is
+      // what makes that true -- there is nothing left to clear, re-answer or
+      // submit again.
+      if (wasExam) retireExamPaper();
       // The paper is done, so the screen comes back: their details, the session
       // box, their results. The exam itself is now a pending row in that list.
       setExamMode(false);
-      // The POST is opaque (no-cors), so there is nothing to wait on. Give the
-      // Sheet a moment to finish writing the rows, then pull the record again so
-      // the quiz they have just sat is in their own list when they scroll down.
+      // The POST is opaque (no-cors), so "it went through" is an assumption
+      // until something reads the record back. For an exam that assumption is
+      // too expensive to make: a trainee told their paper was submitted when it
+      // was not has no reason to mention it to anyone.
+      if (wasExam && traineeLoggedIn()) confirmExamRecorded(code);
+      // Give the Sheet a moment to finish writing the rows, then pull the record
+      // again so the quiz they have just sat is in their own list.
       if (traineeLoggedIn()) setTimeout(loadMyHistory, 2500);
     } else {
       setOnlineStatus(

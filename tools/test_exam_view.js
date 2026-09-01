@@ -20,13 +20,20 @@ const EXAM = Object.assign({ sessionCode: 'G1-9001', sessionName: 'Midterm exam'
 const PRACTICE = Object.assign({ sessionCode: 'G1-7001', sessionName: 'Week 3 practice',
   mode: 'practice', shuffleEachLaunch: false }, COMMON);
 
-let sat = 0;
+let sat = 0, posted = 0;
 
 function route(p) {
   return p.route(/script\.google\.com/, r => {
     const req = r.request();
     if (req.method() === 'POST') {
-      try { if (JSON.parse(req.postData() || '{}').quiz.mode === 'assessment') sat++; } catch { /* */ }
+      try {
+        const body = JSON.parse(req.postData() || '{}');
+        if (body.type === 'quiz_attempt') {
+          posted++;
+          // The real backend refuses a second sitting and writes nothing.
+          if (body.quiz.mode === 'assessment' && sat < 1) sat++;
+        }
+      } catch { /* opaque */ }
       return r.fulfill({ status: 200, body: 'ok' });
     }
     const q = Object.fromEntries(new URL(req.url()).searchParams);
@@ -152,6 +159,11 @@ const visible = (p, sel) => p.evaluate(s => {
   // exam whose results had not been released.
   ok(!(await visible(p, '#studentDownloadResultBtn')),
     'the download button does NOT come back after submitting an exam');
+  // Checked as a property, not just as "invisible". The CSS hides the whole
+  // button row on a handed-in paper, which would mask the JS rule going wrong
+  // -- and a masked rule is an untested one.
+  ok(await p.evaluate(() => document.getElementById('studentDownloadResultBtn').hidden),
+    'and is marked hidden in its own right, not merely covered by CSS');
   const after = await p.evaluate(() => {
     let cap = null;
     const rc = URL.createObjectURL, rk = HTMLAnchorElement.prototype.click;
@@ -166,6 +178,39 @@ const visible = (p, sel) => p.evaluate(s => {
     'it says the mark comes from My results once released');
   const shown = await p.textContent('#studentQuizArea');
   ok(!/\b3\s*\/\s*4\b|75\s*%/.test(shown), 'and no score is anywhere on the page');
+
+  console.log('\n=== 6c. And the paper cannot be sat again ===');
+  // Clearing used to reset the submitted flag, which unlocked Submit: hand in,
+  // clear, re-answer, submit again -- and the app said "submitted successfully"
+  // while the backend refused the write. Four things stop that now, and each is
+  // checked on its own, because any one of them could be undone by itself.
+  ok(!(await p.$('.question-card')), 'the paper is taken off the screen');
+  eq(await p.evaluate(() => currentQuiz.length), 0, 'and out of memory with it');
+  ok(!(await visible(p, '#studentClearBtn')), 'Clear answers is gone');
+  ok(!(await visible(p, '#studentSubmitBtn')), 'so is Submit answers');
+  // Buttons being gone is presentation. These are the rules underneath, called
+  // the way somebody with a browser console would call them.
+  const cleared = await p.evaluate(() => {
+    clearAnswers('student');
+    return {
+      stillSubmitted: studentSubmitted,
+      msg: document.getElementById('studentFeedback').textContent
+    };
+  });
+  ok(cleared.stillSubmitted, 'clearAnswers does not un-submit an exam');
+  ok(/handed in/i.test(cleared.msg), 'and says the exam has been handed in');
+  const before = posted;
+  await p.evaluate(() => submitOnlineResult('student'));
+  await p.waitForTimeout(500);
+  eq(posted, before, 'and a second submit sends nothing');
+
+  console.log('\n=== 6d. The confirmation is checked, not assumed ===');
+  // The POST is opaque, so "submitted successfully" is a guess until the record
+  // is read back. Here the write did happen, so the trainee is told so.
+  await p.waitForTimeout(2600);
+  const msg = (await p.textContent('#studentFeedback')).replace(/\s+/g, ' ');
+  ok(/Recorded\./.test(msg), `the app confirms it read the record back (got "${msg.slice(0, 90)}")`);
+  ok(!/may not have been recorded/i.test(msg), 'and does not warn, because it did register');
 
   console.log('\n=== 7. A practice quiz is not stripped down ===');
   // The clean page is an exam measure. In practice a trainee may well want to

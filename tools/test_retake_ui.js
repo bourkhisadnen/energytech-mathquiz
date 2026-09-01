@@ -91,13 +91,17 @@ async function load(p, code) {
   await p.waitForTimeout(500);
   eq(posted.length, 1, 'one attempt posted');
 
-  console.log('\n=== 2. Pressing Submit again sends nothing more ===');
-  // The submission is opaque, so a trainee who is unsure will press it again.
-  await p.click('#studentSubmitBtn');
+  console.log('\n=== 2. There is nothing left to press ===');
+  // A handed-in exam has its paper and its buttons taken away, so the
+  // press-it-twice case cannot arise through the interface at all.
+  ok(!(await p.isVisible('#studentSubmitBtn')), 'Submit is gone once the exam is in');
+  ok(!(await p.isVisible('#studentClearBtn')), 'and so is Clear answers');
+  // The rule underneath, called the way a console would call it.
+  await p.evaluate(() => submitOnlineResult('student'));
   await p.waitForTimeout(400);
-  await p.click('#studentSubmitBtn');
+  await p.evaluate(() => submitOnlineResult('student'));
   await p.waitForTimeout(400);
-  eq(posted.length, 1, 'still one attempt, however many times it is pressed');
+  eq(posted.length, 1, 'still one attempt, however many times it is called');
   ok(/already submitted/i.test(await p.textContent('#studentFeedback')),
     'and the trainee is told it already went through');
 

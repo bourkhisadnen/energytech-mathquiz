@@ -219,9 +219,39 @@ const APP_MUTANTS = [
     suite: 'test_exam_view.js'
   },
   {
+    what: 'the paper is left on screen after the exam is handed in',
+    from: "      if (wasExam) retireExamPaper();",
+    to:   "      if (false) retireExamPaper();",
+    suite: 'test_exam_view.js'
+  },
+  {
+    what: 'clearing un-submits the exam again, unlocking a re-sit',
+    from: "  if (target === 'student' && studentSubmitted && examSessionActive()) {",
+    to:   "  if (false) {",
+    suite: 'test_exam_view.js'
+  },
+  {
+    what: 'the submission is never read back, so success is only assumed',
+    from: "      if (wasExam && traineeLoggedIn()) confirmExamRecorded(code);",
+    to:   "      if (false) confirmExamRecorded(code);",
+    suite: 'test_exam_confirm.js'
+  },
+  {
+    what: 'a submission that did not register is reported as recorded',
+    from: "  if (found && found.sitting && found.sitting.maySit === false) {",
+    to:   "  if (found && found.sitting) {",
+    suite: 'test_exam_confirm.js'
+  },
+  {
+    what: 'a check that could not be made is reported as recorded',
+    from: "  // Could not check at all: say that, rather than claiming either outcome.\n  el.innerHTML += '<p class=\"warn\">Could not confirm",
+    to:   "  // Could not check at all: say that, rather than claiming either outcome.\n  el.innerHTML += '<p class=\"good\">Recorded. Could not confirm",
+    suite: 'test_exam_confirm.js'
+  },
+  {
     what: 'the screen never comes back after the exam is submitted',
-    from: "      setExamMode(false);\n      // The POST is opaque (no-cors), so there is nothing to wait on.",
-    to:   "      // The POST is opaque (no-cors), so there is nothing to wait on.",
+    from: "      setExamMode(false);\n      // The POST is opaque (no-cors), so \"it went through\" is an assumption",
+    to:   "      // The POST is opaque (no-cors), so \"it went through\" is an assumption",
     suite: 'test_exam_view.js'
   },
   {
@@ -260,7 +290,7 @@ try {
 
 let caught = 0, survived = [];
 console.log('baseline:');
-for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js', 'test_exam_view.js']) {
+for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js', 'test_exam_view.js', 'test_exam_confirm.js']) {
   try {
     execFileSync('node', ['/tmp/energytech_app/' + suite], { stdio: 'pipe' });
     console.log(`  clean   ${suite}`);
@@ -271,6 +301,30 @@ for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release
 }
 console.log('');
 
+/* A mutation is a temporary edit to a REAL source file. If this process dies
+ * between applying one and restoring it -- Ctrl-C, a kill, an uncaught throw --
+ * the working tree is left silently patched, and whatever runs next reads a file
+ * with a guard deleted from it. That happened: a killed run removed a line from
+ * app.js, and the next test failed for a reason that had nothing to do with the
+ * code under test. So the restore is a handler, not just the next statement. */
+let inFlight = null;                    // { file, base } while a mutant is applied
+function restoreInFlight() {
+  if (!inFlight) return;
+  try { fs.writeFileSync(inFlight.file, inFlight.base); } catch { /* nothing better to do */ }
+  inFlight = null;
+}
+['SIGINT', 'SIGTERM', 'SIGHUP'].forEach(sig => process.on(sig, () => {
+  restoreInFlight();
+  console.log(`\n${sig}: source restored before exit.`);
+  process.exit(130);
+}));
+process.on('uncaughtException', err => {
+  restoreInFlight();
+  console.log('Crashed, but the source was restored: ' + err.message);
+  process.exit(1);
+});
+process.on('exit', restoreInFlight);
+
 function runMutants(list, file, base) {
   for (const m of list) {
     if (!base.includes(m.from)) {
@@ -278,11 +332,12 @@ function runMutants(list, file, base) {
       survived.push(m.what + ' [pattern not found]');
       continue;
     }
+    inFlight = { file, base };
     fs.writeFileSync(file, base.replace(m.from, m.to));
     let failed = false;
     try { execFileSync('node', ['/tmp/energytech_app/' + m.suite], { stdio: 'pipe' }); }
     catch { failed = true; }
-    fs.writeFileSync(file, base);
+    restoreInFlight();
     if (failed) { caught++; console.log(`  caught   ${m.what}  (${m.suite})`); }
     else { survived.push(m.what); console.log(`  SURVIVED ${m.what}  (${m.suite})`); }
   }
