@@ -103,8 +103,10 @@ const visible = (p, sel) => p.evaluate(s => {
   await p.click('#card-0 input');
   await p.waitForTimeout(120);
   eq((await p.textContent('#examProgress')).trim(), '1 of 4 answered', 'counts up as they answer');
+  // One deliberately wrong, so a leaked mark reads as a distinctive 3 / 4.
   await p.evaluate(() => currentQuiz.forEach((q, i) => {
-    const el = document.querySelector(`#card-${i} input[value="${q.answer}"]`);
+    const pick = i === 1 ? ['a', 'b', 'c', 'd'].find(L => L !== q.answer) : q.answer;
+    const el = document.querySelector(`#card-${i} input[value="${pick}"]`);
     if (el) el.click();
   }));
   await p.waitForTimeout(120);
@@ -143,6 +145,28 @@ const visible = (p, sel) => p.evaluate(s => {
   ok(await visible(p, '#traineeHomePanel'), 'the home panel is back');
   ok(await visible(p, '.header-actions'), 'and the header buttons');
 
+  console.log('\n=== 6b. But the mark does not come back with it ===');
+  // This is where the first version of this feature failed. The download was
+  // tied to exam-mode-the-screen-state, which ends at Submit, so the button
+  // reappeared the instant the paper went in and handed over the score of an
+  // exam whose results had not been released.
+  ok(!(await visible(p, '#studentDownloadResultBtn')),
+    'the download button does NOT come back after submitting an exam');
+  const after = await p.evaluate(() => {
+    let cap = null;
+    const rc = URL.createObjectURL, rk = HTMLAnchorElement.prototype.click;
+    URL.createObjectURL = b => { cap = b; return 'blob:x'; };
+    HTMLAnchorElement.prototype.click = function () {};
+    try { downloadResult(); } catch (e) { /* fine */ }
+    URL.createObjectURL = rc; HTMLAnchorElement.prototype.click = rk;
+    return cap ? cap.text() : null;
+  });
+  ok(after === null, 'and calling it directly produces no file at all');
+  ok(/not downloadable/i.test(await p.textContent('#studentFeedback')),
+    'it says the mark comes from My results once released');
+  const shown = await p.textContent('#studentQuizArea');
+  ok(!/\b3\s*\/\s*4\b|75\s*%/.test(shown), 'and no score is anywhere on the page');
+
   console.log('\n=== 7. A practice quiz is not stripped down ===');
   // The clean page is an exam measure. In practice a trainee may well want to
   // load another code straight afterwards.
@@ -154,6 +178,29 @@ const visible = (p, sel) => p.evaluate(s => {
   ok(await visible(p, '#myHistoryPanel'), 'and their results');
   ok(await visible(p, '#studentDownloadResultBtn'), 'and the download button, which is fine here');
   ok(!(await p.$('.exam-head')), 'and no exam header');
+
+  // Downloading is not marking. Computing the score used to flag every card and
+  // light up the correct choice as a side effect; in an exam that was the leak,
+  // and in practice it is still wrong -- pressing "download" should not quietly
+  // mark a paper the trainee is still working on. This is what keeps that fix
+  // honest now that the exam path returns before ever reaching it.
+  await p.click('#card-0 input');
+  const practice = await p.evaluate(() => {
+    const rc = URL.createObjectURL, rk = HTMLAnchorElement.prototype.click;
+    let blob = null;
+    URL.createObjectURL = b => { blob = b; return 'blob:x'; };
+    HTMLAnchorElement.prototype.click = function () {};
+    try { downloadResult(); } catch (e) { /* fine */ }
+    URL.createObjectURL = rc; HTMLAnchorElement.prototype.click = rk;
+    return {
+      gotFile: Boolean(blob),
+      marked: document.querySelectorAll('.choice.correct-choice').length,
+      flagged: document.querySelectorAll('.question-card.flag-correct, .question-card.flag-wrong, .question-card.flag-unanswered').length
+    };
+  });
+  ok(practice.gotFile, 'a practice result does download');
+  eq(practice.marked, 0, 'without marking the correct choice on the paper');
+  eq(practice.flagged, 0, 'and without flagging any card right, wrong or unanswered');
 
   console.log('\n=== 8. No page errors ===');
   ok(errs.length === 0, errs.length ? errs.join(' | ') : 'none');

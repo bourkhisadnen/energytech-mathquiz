@@ -1,4 +1,4 @@
-const CACHE_NAME = 'energytech-quiz-app-v43-exam-page';
+const CACHE_NAME = 'energytech-quiz-app-v44-no-exam-download';
 const FILES = [
   './',
   './index.html',

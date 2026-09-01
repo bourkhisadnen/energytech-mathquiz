@@ -1076,11 +1076,24 @@ function buildQuizFromSettings(settings = {}, target = 'teacher') {
 
 function setExamMode(on) {
   document.body.classList.toggle('exam-mode', Boolean(on));
-  // The download writes the score and the wrong-question list into a file, and
-  // computing it marks the right answers on screen. During an exam that is a
-  // way to read the paper's key, so the button is not there to press.
+  syncResultDownload();
+}
+
+/* Is the quiz on screen an exam? This is a fact about the SESSION, and it stays
+ * true after the paper is submitted -- which is the whole point. Tying the
+ * download to exam-mode-the-screen-state was wrong: that state ends at Submit,
+ * so the button came back the moment the paper went in, and handed over the
+ * mark of an exam whose results had not been released. */
+function examSessionActive() {
+  return Boolean(currentSession && currentSession.mode === 'assessment');
+}
+
+/* The download writes the score, the percentage and the wrong-question list
+ * into a file. For an exam that is the instructor's to release, not the app's
+ * to hand out -- before the paper is submitted or after. */
+function syncResultDownload() {
   const dl = $('studentDownloadResultBtn');
-  if (dl) dl.hidden = Boolean(on);
+  if (dl) dl.hidden = examSessionActive();
 }
 
 function examHeaderHtml(n) {
@@ -1360,6 +1373,18 @@ async function copyReference() {
 }
 
 function downloadResult() {
+  // Hiding the button is presentation; this is the rule. An exam mark reaches
+  // the trainee through My results once the instructor releases it, and by no
+  // other route -- including a button press the app did not mean to offer.
+  if (examSessionActive()) {
+    const el = $('studentFeedback');
+    if (el) {
+      el.className = 'feedback warn';
+      el.innerHTML = 'Exam results are not downloadable. Your mark will appear under '
+        + '<strong>My results</strong> once your instructor releases it.';
+    }
+    return;
+  }
   // reveal:false matters. Marking the paper used to light up the correct choice
   // on every card as a side effect, so pressing this mid-exam showed the key.
   if (!lastFeedback) calculateScore({ reveal: false });
@@ -2609,6 +2634,7 @@ function renderTraineeHome() {
       </dl>`;
   }
 
+  syncResultDownload();
   // Their record loads on its own; the home screen is usable before it arrives.
   loadMyHistory();
 }

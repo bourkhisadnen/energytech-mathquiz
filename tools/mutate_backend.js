@@ -202,8 +202,20 @@ const APP_MUTANTS = [
   },
   {
     what: 'the download button stays on screen during an exam',
-    from: "  if (dl) dl.hidden = Boolean(on);",
+    from: "  if (dl) dl.hidden = examSessionActive();",
     to:   "  if (dl) dl.hidden = false;",
+    suite: 'test_exam_view.js'
+  },
+  {
+    what: 'the download follows the screen state, so it returns after Submit',
+    from: "  if (dl) dl.hidden = examSessionActive();",
+    to:   "  if (dl) dl.hidden = document.body.classList.contains('exam-mode');",
+    suite: 'test_exam_view.js'
+  },
+  {
+    what: 'downloadResult stops refusing an exam and writes the mark to a file',
+    from: "  if (examSessionActive()) {\n    const el = $('studentFeedback');",
+    to:   "  if (false) {\n    const el = $('studentFeedback');",
     suite: 'test_exam_view.js'
   },
   {
