@@ -268,7 +268,13 @@ This creates three sheets:
 - `Attempts`
 - `ItemResponses`
 
-It also creates an `Instructors` sheet (if it doesn't already exist) and adds the bootstrap admin account described above. Unlike the other three sheets, `Instructors` is **never cleared** by `setup()`, so re-running `setup()` later to reset quiz results will not remove any approved colleague accounts.
+It also creates an `Instructors` sheet (if it doesn't already exist) and adds the bootstrap admin account described above.
+
+**`setup()` is safe to run at any time.** It only ever adds what is missing: a sheet that already holds rows is left exactly as it is, and no recorded attempt is removed. Run it as often as you like — after pasting a new `Code.gs`, to check the script is alive, or for no reason at all.
+
+> **This was not always true.** Before v46, every run of `setup()` cleared `Sessions`, `Attempts` and `ItemResponses` back to their header rows — and an earlier version of this README described that as the way to "reset quiz results". Pressing **Run** in the Apps Script editor, which is the ordinary way to check a deployment, therefore erased every paper anybody had sat. If you are upgrading from an older `Code.gs`, take a copy of the spreadsheet before you paste the new one.
+
+To deliberately erase every recorded attempt there is now a separate function, `eraseAllRecords_`, and it refuses to run until you arm it: set `CONFIRM_ERASE` at the top of `Code.gs` to `ERASE EVERYTHING`, run it once, then set it back to `''`. It is not reachable over the web, and nothing in the app calls it.
 
 ### 4. Deploy as Web App
 
@@ -569,3 +575,37 @@ The generated session code now has a **Copy** button beside it, so the instructo
 ## Session sync fix
 
 Session codes are now saved using the embedded Google Apps Script URL by default, ignoring older stale URLs saved in browser storage. After a session is created, the app immediately checks whether the session can be loaded back from Google Sheets. If the online save is not verified, the instructor sees a warning instead of assuming trainees can use the code.
+
+
+## Session reports
+
+Every row in **My sessions** — practice and exam alike — has a **Report** button. It opens a full-page report of that one sitting, in place of the sessions list, with a **Back to my sessions** button to leave it.
+
+The report shows:
+
+- **The overall picture.** How many sat it, the average percentage, how many scored full marks, how many passed and how many fell below the pass mark. Underneath, the highest and lowest marks.
+- **How each group did**, as a bar per group, when more than one group sat the session.
+- **Every trainee's mark**, in a table per group. Groups run weakest-average first, and inside each group the trainees run from the worst mark to the best, so whoever needs the most help is at the top of the page rather than eleven rows down. Each row carries the trainee's name, EnergyTech ID, raw score and percentage.
+- **Who did not sit it** — the trainees on the roster for that intake and group with no paper on record.
+
+**The pass mark is 70%.** It is 70% everywhere in the report: the "below 70%" count, the pass count, and the red or green of each row and group average. The 80/50 colour bands used elsewhere in the app answer a different question (how is this trainee getting on) from the one a report asks (did they pass).
+
+### Opening one paper
+
+Clicking a row, or its **See answers** button, opens that trainee's paper question by question — every question as they saw it, the option they chose, and the correct one — with their name and ID at the top. **Back to the report** returns to the list with the figures intact.
+
+### Retakes
+
+A trainee who sat the session twice appears **once**, standing on their most recent sitting, tagged `SITTING 2`. Counting a retake as a second trainee would put the abandoned paper into every average on the page.
+
+### Exams whose results are not released yet
+
+The report shows the marks whether or not you have released them. Releasing is what lets the *trainees* see their marks; you are the one deciding whether to release, and cannot decide without looking. A held-back exam carries a note on the report saying the marks are not visible to the group yet.
+
+### Printing
+
+The **Print** button prints the report and nothing else — no page header, no navigation, no buttons, and without the See answers column. Each group's name sits in its table header, so a group that runs over a page break still says which group it is at the top of the next page. Print to PDF to keep or send a copy.
+
+### Who can open what
+
+An instructor can report on the sessions they ran; an admin can report on anybody's. A paper the viewer would not be allowed to open is not listed at all, so the report never offers a row that then refuses to open.

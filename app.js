@@ -3775,7 +3775,8 @@ function renderSessions() {
           : s.published
             ? `<span class="released-tag">Released</span>`
             : '<span class="pending-tag">Held back</span>'}</td>
-        <td class="row-actions">${exam
+        <td class="row-actions"><button type="button" class="icon-btn open-report"
+             data-code="${escapeHtml(s.sessionCode)}">Report</button>${exam
           ? `<button type="button" class="icon-btn ${s.published ? 'unpublish-session' : 'publish-session'}"
                data-code="${escapeHtml(s.sessionCode)}">${s.published ? 'Hide again' : 'Release results'}</button>
              <button type="button" class="icon-btn who-sat" data-code="${escapeHtml(s.sessionCode)}">Who sat it</button>`
@@ -3866,11 +3867,216 @@ async function setSessionPublished(code, release) {
   }
 }
 
+/* ==========================================================================
+ * The report of one session
+ *
+ * What one sitting produced, on one page: how the group did as a whole, what
+ * every trainee scored, and any one of their papers opened question by
+ * question. Practice and exam alike -- an instructor wants to know how a
+ * practice quiz went too, and the only difference is that its marks were never
+ * held back in the first place.
+ *
+ * A pass is 70%, and it is 70% everywhere in here: the count of failures, the
+ * colour of a row, the group averages. The 80/50 bands used elsewhere in the
+ * app answer a different question -- how is this trainee getting on -- from the
+ * one a report asks, which is whether they passed.
+ * ========================================================================== */
+
+const REPORT_PASS_MARK = 70;
+
+let reportData = null;           // the session on screen, null when none is
+let reportCode = '';
+
+const REPORT_VIEW = {
+  self: false,
+  target: 'sessionReportBody',
+  scrollTo: 'sessionReportView',
+  attemptAction: 'attempt_detail',
+  backLabel: 'the report',
+  data: null,
+  auth: () => ({ token: authToken })
+};
+
+const reportPassed = t => t.percent >= REPORT_PASS_MARK;
+const reportBand = p => (p >= REPORT_PASS_MARK ? 'good' : 'bad');
+
+/* Worst first. A report is read to find who needs help, so they are at the top
+ * rather than eleven rows down. Equal marks fall back to the name, so the order
+ * does not wobble between two loads of the same figures. */
+function worstFirst(a, b) {
+  return a.percent - b.percent || String(a.name || '').localeCompare(String(b.name || ''));
+}
+
+function reportStats(list) {
+  const n = list.length;
+  return {
+    sat: n,
+    average: n ? Math.round(list.reduce((a, t) => a + t.percent, 0) / n) : 0,
+    // Full marks off the raw score, not the percentage: a rounded 99.6% would
+    // print as 100% and is not full marks.
+    full: list.filter(t => t.total > 0 && t.score === t.total).length,
+    passed: list.filter(reportPassed).length,
+    failed: list.filter(t => !reportPassed(t)).length,
+    highest: n ? Math.max(...list.map(t => t.percent)) : 0,
+    lowest: n ? Math.min(...list.map(t => t.percent)) : 0
+  };
+}
+
+/* Grouped, weakest group first -- the same reason the weakest trainee is first
+ * inside it. Most sessions are run for one group and this collapses to a single
+ * heading; it earns its keep when somebody from another group sat as well. */
+function reportGroups(list) {
+  const by = {};
+  list.forEach(t => {
+    const g = t.group || '—';
+    if (!by[g]) by[g] = [];
+    by[g].push(t);
+  });
+  return Object.keys(by).map(name => {
+    const trainees = by[name].slice().sort(worstFirst);
+    return { name, trainees, stats: reportStats(trainees) };
+  }).sort((a, b) => a.stats.average - b.stats.average || String(a.name).localeCompare(String(b.name)));
+}
+
+async function openSessionReport(code) {
+  reportCode = code;
+  reportData = null;
+  if ($('sessionsWorkspace')) $('sessionsWorkspace').hidden = true;
+  if ($('sessionReportView')) $('sessionReportView').hidden = false;
+  document.body.classList.add('report-open');
+  if ($('reportCrumb')) $('reportCrumb').textContent = code;
+  paint(REPORT_VIEW, '<p class="pane-empty">Loading the report&hellip;</p>');
+  if ($('sessionReportView')) $('sessionReportView').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  try {
+    const data = await rosterCall('session_report',
+      { token: authToken, sessionCode: code }, 'energytechReport', 1);
+    if (!data.ok) {
+      paint(REPORT_VIEW, `<div class="feedback bad">${escapeHtml(data.error || 'Could not load that report.')}</div>`);
+      return;
+    }
+    reportData = data;
+    renderSessionReport();
+  } catch (err) {
+    paint(REPORT_VIEW, `<div class="feedback bad">${escapeHtml(err.message || String(err))}</div>`);
+  }
+}
+
+function closeSessionReport() {
+  reportCode = '';
+  reportData = null;
+  document.body.classList.remove('report-open');
+  if ($('sessionReportView')) $('sessionReportView').hidden = true;
+  if ($('sessionsWorkspace')) $('sessionsWorkspace').hidden = false;
+}
+
+function renderSessionReport() {
+  if (!reportData) return;
+  const session = reportData.session || {};
+  const trainees = reportData.trainees || [];
+  const absent = reportData.absent || [];
+  const stats = reportStats(trainees);
+  const groups = reportGroups(trainees);
+  const exam = session.mode === 'assessment';
+  const when = whenParts(session.timestamp);
+
+  if ($('reportCrumb')) $('reportCrumb').textContent = session.sessionName || session.sessionCode || reportCode;
+
+  const head = `
+    <header class="report-head">
+      <h3>${escapeHtml(session.sessionName || session.sessionCode || reportCode)}</h3>
+      <p class="profile-sub"><span class="mono">${escapeHtml(session.sessionCode || reportCode)}</span>
+        · ${escapeHtml(session.intake || '—')} / ${escapeHtml(session.group || '—')}
+        · <span class="mode-pill ${escapeHtml(session.mode || 'practice')}">${escapeHtml((session.mode || 'practice').toUpperCase())}</span>
+        ${exam ? (session.published
+          ? '<span class="released-tag">Released</span>'
+          : '<span class="pending-tag">Held back</span>') : ''}</p>
+      <p class="profile-sub report-sub">${escapeHtml(session.questionSet || '')}${
+        when.date ? ' · ' + escapeHtml(when.date) : ''}</p>
+    </header>`;
+
+  const absentList = absent.length ? `
+    <section class="report-absent">
+      <h4 class="profile-h">Did not sit it
+        <span class="hint">${absent.length} of the ${escapeHtml(session.group || '')} roster</span></h4>
+      <ul class="absent-list">${absent.map(a => `<li>${escapeHtml(a.name || '(no name)')}
+        <span class="mono hint">${escapeHtml(a.energytechId)}</span></li>`).join('')}</ul>
+    </section>` : '';
+
+  if (!trainees.length) {
+    paint(REPORT_VIEW, `${head}
+      <p class="pane-empty">Nobody has sat this session yet, so there is nothing to report on.</p>
+      ${absentList}`);
+    return;
+  }
+
+  // An exam still held back is worth saying twice: the figures below are the
+  // instructor's to look at, and the trainees cannot see any of them yet.
+  const heldNote = exam && !session.published
+    ? `<div class="feedback warn report-held">These marks are not visible to the trainees. Release the results from
+       <strong>My sessions</strong> when you are ready for them to be.</div>`
+    : '';
+
+  paint(REPORT_VIEW, `
+    ${head}
+    ${heldNote}
+    <div class="stat-row report-stats">
+      <div class="stat"><span class="stat-value">${stats.sat}</span><span class="stat-label">sat it</span></div>
+      <div class="stat"><span class="stat-value ${reportBand(stats.average)}-text">${stats.average}%</span><span class="stat-label">average</span></div>
+      <div class="stat"><span class="stat-value">${stats.full}</span><span class="stat-label">full marks</span></div>
+      <div class="stat"><span class="stat-value good-text">${stats.passed}</span><span class="stat-label">passed</span></div>
+      <div class="stat"><span class="stat-value ${stats.failed ? 'bad-text' : ''}">${stats.failed}</span><span class="stat-label">below ${REPORT_PASS_MARK}%</span></div>
+    </div>
+    <p class="hint report-range">Highest ${stats.highest}% · lowest ${stats.lowest}% ·
+      a pass is ${REPORT_PASS_MARK}% or above.</p>
+
+    ${groups.length > 1 ? `<h4 class="profile-h">How each group did</h4>
+      <ul class="lesson-bars report-group-bars">${groups.map(g => `
+        <li>
+          <span class="lesson-name">Group ${escapeHtml(g.name)}</span>
+          <span class="bar"><span class="bar-fill ${reportBand(g.stats.average)}" style="width:${Math.max(g.stats.average, 2)}%"></span></span>
+          <span class="lesson-score ${reportBand(g.stats.average)}-text">${g.stats.average}%</span>
+          <span class="lesson-count">${g.stats.sat} sat</span>
+        </li>`).join('')}</ul>` : ''}
+
+    <p class="hint report-order-note">Worst mark first, so whoever needs the most help is at the top of each group.
+      Open a row to see the paper as it was answered.</p>
+
+    ${groups.map(g => `
+      <section class="report-group">
+        <div class="table-wrap"><table class="dashboard-table report-table">
+          <colgroup><col class="c-rank"><col class="c-name"><col class="c-score"><col class="c-act"></colgroup>
+          <thead>
+            <!-- The group name lives in the thead rather than in a heading above
+                 the table so that print repeats it: a second page of trainees
+                 with no group on it is a page of names nobody can place. -->
+            <tr><th class="group-th" colspan="4">Group ${escapeHtml(g.name)}
+              <span class="hint">${g.stats.sat} sat · average ${g.stats.average}% ·
+                ${g.stats.failed} below ${REPORT_PASS_MARK}%</span></th></tr>
+            <tr><th class="rank-col">#</th><th>Trainee</th><th>Score</th><th class="act-col"></th></tr>
+          </thead>
+          <tbody>${g.trainees.map((t, i) => `
+            <tr class="attempt-row" data-attempt="${escapeHtml(t.attemptId || '')}" tabindex="0" role="button">
+              <td class="rank-col">${i + 1}</td>
+              <td>${escapeHtml(t.name || '(no name)')}
+                ${t.sittingCount > 1 ? `<span class="resat-tag" title="Sat it ${t.sittingCount} times; the latest sitting is the one shown">sitting ${t.sittingCount}</span>` : ''}
+                ${t.registered && t.registered !== 'yes' ? '<span class="guest-tag" title="Sat as a guest, without logging in">guest</span>' : ''}
+                ${t.onRoster === false ? '<span class="guest-tag" title="Not on the roster for this intake">off roster</span>' : ''}
+                <br><span class="mono hint">${escapeHtml(t.energytechId)}</span></td>
+              <td class="score-cell"><strong class="${reportBand(t.percent)}-text">${t.score} / ${t.total}</strong>
+                <span class="hint">${t.percent}%</span></td>
+              <td class="row-actions"><button type="button" class="icon-btn open-attempt"
+                data-attempt="${escapeHtml(t.attemptId || '')}">See answers</button></td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+      </section>`).join('')}
+    ${absentList}`);
+}
+
 /* ---------------- one attempt, question by question ---------------- */
 
 async function openAttempt(view, attemptId) {
   const back = `<div class="button-row"><button type="button" class="secondary back-to-profile">${
-    view.self ? '&#8592; Back to my results' : 'Back to the profile'}</button></div>`;
+    view.self ? '&#8592; Back to my results' : 'Back to ' + (view.backLabel || 'the profile')}</button></div>`;
   paint(view, '<p class="pane-empty">Loading the answers&hellip;</p>');
   try {
     const data = await rosterCall(view.attemptAction,
@@ -3943,11 +4149,14 @@ function renderAttempt(view, data) {
   paint(view, `
     <div class="button-row">
       <button type="button" class="secondary back-to-profile">&#8592; Back to ${
-        view.self ? 'my results' : escapeHtml(attempt.name || 'the profile')}</button>
+        view.self ? 'my results' : (view.backLabel || escapeHtml(attempt.name || 'the profile'))}</button>
     </div>
     <header class="profile-head">
       <div>
         <h3>${escapeHtml(attempt.sessionName || attempt.sessionCode)}</h3>
+        ${view.self ? '' : `<p class="profile-sub attempt-who"><strong>${escapeHtml(attempt.name || '(no name)')}</strong>
+          · <span class="mono">${escapeHtml(attempt.energytechId || '')}</span>${
+          attempt.group ? ' · ' + escapeHtml(attempt.group) : ''}</p>`}
         <p class="profile-sub">${escapeHtml(whenText(attempt.timestamp))}
           · ${escapeHtml(attempt.questionSet || '')}
           · <span class="mode-pill ${escapeHtml(attempt.mode || 'practice')}">${escapeHtml((attempt.mode || 'practice').toUpperCase())}</span></p>
@@ -4317,7 +4526,33 @@ function wireRosterUi() {
     }
     const grant = e.target.closest('.grant-retake');
     if (grant) { grantRetake(grant.dataset.code, grant.dataset.id); return; }
+    const rep = e.target.closest('.open-report');
+    if (rep) { openSessionReport(rep.dataset.code); return; }
   });
+
+  /* --- the report of one session --- */
+  if ($('reportBackBtn')) $('reportBackBtn').addEventListener('click', closeSessionReport);
+  if ($('reportPrintBtn')) $('reportPrintBtn').addEventListener('click', () => window.print());
+  if ($('sessionReportView')) {
+    const openRow = t => {
+      // Back from a paper returns to the report, not to a trainee profile the
+      // instructor never opened.
+      if (t.closest('.back-to-profile')) { renderSessionReport(); return true; }
+      const row = t.closest('.open-attempt') || t.closest('.attempt-row');
+      if (row && row.dataset.attempt) { openAttempt(REPORT_VIEW, row.dataset.attempt); return true; }
+      return Boolean(row);
+    };
+    $('sessionReportView').addEventListener('click', e => {
+      if (e.target && e.target.closest) openRow(e.target);
+    });
+    $('sessionReportView').addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (e.target && e.target.closest && e.target.classList.contains('attempt-row')) {
+        e.preventDefault();
+        openRow(e.target);
+      }
+    });
+  }
 
   // The per-launch shuffle is an exam measure, so the box only appears when the
   // session is an exam -- and is cleared when it is not, so a mode switched back

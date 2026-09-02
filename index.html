@@ -240,13 +240,27 @@
 
       <!-- Exam marks stay hidden from trainees until they are released here. -->
       <section class="panel dashboard-panel" id="sessionsPanel">
-        <h2>My sessions</h2>
-        <p class="hint">Exam results are held back until you release them. Practice quizzes are visible to trainees straight away.</p>
-        <div class="button-row">
-          <button id="loadSessionsBtn">Load my sessions</button>
+        <div id="sessionsWorkspace">
+          <h2>My sessions</h2>
+          <p class="hint">Exam results are held back until you release them. Practice quizzes are visible to trainees straight away.</p>
+          <div class="button-row">
+            <button id="loadSessionsBtn">Load my sessions</button>
+          </div>
+          <div id="sessionsStatus" class="feedback empty">Click <strong>Load my sessions</strong> to see what you have run and release exam results.</div>
+          <div id="sessionsList"></div>
         </div>
-        <div id="sessionsStatus" class="feedback empty">Click <strong>Load my sessions</strong> to see what you have run and release exam results.</div>
-        <div id="sessionsList"></div>
+
+        <!-- One session reported on in full. It replaces the list rather than
+             unfolding beneath it, so the per-trainee table and a paper opened
+             from it both get the width of the panel. -->
+        <section id="sessionReportView" class="report-view" hidden>
+          <nav class="profile-crumbs report-crumbs">
+            <button type="button" class="crumb-back" id="reportBackBtn">&#8592; Back to my sessions</button>
+            <span id="reportCrumb" class="crumb-here"></span>
+            <button type="button" class="secondary report-print-btn" id="reportPrintBtn">Print</button>
+          </nav>
+          <div id="sessionReportBody"></div>
+        </section>
       </section>
 
       <section class="panel dashboard-panel" id="intakePanelSection" hidden>

@@ -1039,3 +1039,92 @@ body.exam-mode .app-header { padding-top: 14px; padding-bottom: 14px; }
 /* A handed-in exam: the buttons are gone, so the panel is just the receipt. */
 .result-panel.exam-done h2 { display: none; }
 .result-panel.exam-done .button-row { display: none; }
+
+/* ==========================================================================
+   The report of one session
+
+   It borrows the profile view's frame -- same crumb bar, same stat tiles, same
+   bars -- because it is the same kind of page: one thing, looked at closely,
+   with the list it came from a button away.
+   ========================================================================== */
+
+.report-view { border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 0 0 18px; }
+.report-print-btn { margin-left: auto; padding: 5px 12px; font-size: .84rem; }
+#sessionReportBody { padding: 0 16px; }
+
+.report-head { margin: 16px 0 4px; }
+.report-head h3 { margin: 0; color: var(--blue); font-size: 1.25rem; }
+.report-head .released-tag, .report-head .pending-tag { margin-left: 4px; }
+.report-sub { font-size: .85rem; }
+.report-held { margin: 12px 0 0; }
+.report-stats { margin-top: 14px; }
+.report-range, .report-order-note { margin: 8px 0 0; }
+.report-group-bars { margin-top: 4px; }
+.report-group { margin-top: 16px; }
+
+/* Each group gets its own table, and on the page -- printed especially -- they
+   sit one above another. Fixed columns, set on the colgroup so the group's
+   spanning header row cannot upset them, are what make the tables read as one
+   list rather than as several that happen to be near each other. */
+.report-table { table-layout: fixed; }
+.report-table col.c-rank { width: 2.8rem; }
+.report-table col.c-score { width: 9rem; }
+.report-table col.c-act { width: 8rem; }
+.report-table td { vertical-align: middle; }
+.report-table td:nth-child(2) { white-space: normal; }
+.report-table .score-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.report-table .rank-col { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: .85rem; }
+.report-table .group-th { font-size: 1rem; padding-top: 10px; padding-bottom: 10px; }
+.report-table .group-th .hint { font-weight: 400; font-size: .82rem; margin-left: 8px; }
+
+/* Sat more than once. Distinct from the guest tag beside it: one says how they
+   signed in, the other says which of their papers this is. */
+.resat-tag {
+  display: inline-block; padding: 1px 6px; border-radius: 999px;
+  background: #e4edf8; color: var(--blue); font-size: .7rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: .04em; vertical-align: middle;
+}
+
+.report-absent { margin-top: 6px; }
+.absent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 20px; }
+.absent-list li { color: var(--muted); font-size: .9rem; }
+
+@media (max-width: 640px) {
+  /* The button column goes; the row itself already opens the paper. Fixed
+     columns go with it -- a hidden cell does not shrink its col -- so what is
+     left sizes itself to the phone. */
+  .report-table { table-layout: auto; width: 100%; font-size: .88rem; }
+  .report-table .act-col, .report-table .row-actions { display: none; }
+  .report-table th, .report-table td { padding-left: 8px; padding-right: 8px; white-space: normal; }
+}
+
+/* On paper the report is the whole page. Everything the instructor pressed to
+   get here -- the header, the nav, the other panels, the button column -- is
+   the way in, not part of the document, so none of it prints. */
+@media print {
+  body.report-open .app-header,
+  body.report-open footer,
+  body.report-open .panel:not(#sessionsPanel),
+  body.report-open #sessionsWorkspace,
+  body.report-open .report-crumbs,
+  body.report-open .report-order-note,
+  /* The action column by its own class, never by position: the group's header
+     row is a single cell spanning the table, so "the last th" is that heading
+     on one row and the See-answers column on the next. */
+  body.report-open .report-table .row-actions,
+  body.report-open .report-table .act-col { display: none !important; }
+  body.report-open .report-table col.c-act { width: 0; }
+
+  body.report-open #sessionsPanel,
+  body.report-open .report-view { border: 0; box-shadow: none; border-radius: 0; padding: 0; margin: 0; }
+  body.report-open #sessionReportBody { padding: 0; }
+  body.report-open .table-wrap { overflow: visible; }
+  body.report-open .stat { background: #fff; }
+
+  /* A long group is allowed to run over a page rather than leaving one half
+     empty -- its name is in the thead, which every page repeats, so a trainee
+     on the second page is still under a heading that says who they are with. */
+  body.report-open .report-table thead { display: table-header-group; }
+  body.report-open .report-table tr { break-inside: avoid; }
+  body.report-open .report-absent { break-inside: avoid; }
+}
