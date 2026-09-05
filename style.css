@@ -1128,3 +1128,62 @@ body.exam-mode .app-header { padding-top: 14px; padding-bottom: 14px; }
   body.report-open .report-table tr { break-inside: avoid; }
   body.report-open .report-absent { break-inside: avoid; }
 }
+
+/* ==========================================================================
+   Exporting a session as an interactive worksheet
+   ========================================================================== */
+
+.worksheet-export {
+  margin-top: 14px; padding: 14px 16px 12px;
+  border: 1px solid var(--border); border-left: 4px solid var(--accent);
+  border-radius: 10px; background: var(--light);
+}
+.worksheet-export h3 { margin: 0 0 4px; color: var(--blue); font-size: 1rem; }
+.worksheet-export .hint { margin: 0 0 10px; }
+.worksheet-export .button-row { margin: 0 0 10px; }
+
+/* The key really is readable inside the file, so the warning is part of the
+   control, not a footnote under it. */
+.worksheet-warning {
+  margin: 0; padding: 8px 10px; border-radius: 8px;
+  background: #fff6e5; border: 1px solid #e2c98c; color: #6b4a05;
+  font-size: .85rem; line-height: 1.45;
+}
+.worksheet-export .feedback { margin-top: 10px; }
+
+/* ==========================================================================
+   The explanation video, on the question it belongs to
+
+   The list under the paper is still the index of everything they got wrong.
+   This is the same link on the card itself, so a trainee reading the question
+   they missed can watch the explanation without scrolling to the foot of the
+   page and matching Q-numbers by eye.
+   ========================================================================== */
+
+.card-video {
+  display: block;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border: 1px solid #0078b8;
+  border-radius: 9px;
+  background: #eef8ff;
+  color: var(--blue);
+  font-weight: 750;
+  font-size: .9rem;
+  text-align: center;
+  text-decoration: none;
+}
+.card-video:hover { background: #dff1ff; }
+.card-video:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* On a marked-wrong card the button should read as the way out of the mistake,
+   not as more red. */
+.question-card.flag-wrong .card-video {
+  border-color: #0078b8;
+  background: #eaf6ff;
+}
+
+@media print {
+  /* A printed paper cannot be clicked. */
+  .card-video { display: none !important; }
+}

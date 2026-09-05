@@ -7,7 +7,55 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 
-const CODE = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed/google_apps_script/Code.gs';
+const path = require('path');
+
+const ROOT = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed';
+const CODE = ROOT + '/google_apps_script/Code.gs';
+const APP = ROOT + '/app.js';
+const WS = ROOT + '/worksheet_tex.js';
+
+/* A mutation is a temporary edit to a REAL source file, and the process holding
+ * that edit can die in ways no handler catches. The signal handlers further
+ * down cover Ctrl-C and a clean SIGTERM, but execFileSync blocks the event loop
+ * for the whole of each suite, so a SIGTERM that arrives mid-suite and is
+ * followed by a hard kill never gets to run them. That happened: a run cut off
+ * at a time limit left `if (built.images.length)` reading `if (false)` in
+ * app.js, and everything tested afterwards was tested against a broken export
+ * -- passing, because the tests were measuring the mutant.
+ *
+ * So the harness no longer trusts unwinding alone. It keeps a pristine copy of
+ * each file on disk, drops a marker while one is patched, and puts the file
+ * back on the next run if it finds that marker still there. */
+const SNAP_DIR = '/tmp/energytech_app/.mutation-snapshot';
+const MARKER = path.join(SNAP_DIR, 'in-flight.json');
+
+function recoverFromEarlierRun() {
+  if (!fs.existsSync(MARKER)) return;
+  let info = null;
+  try { info = JSON.parse(fs.readFileSync(MARKER, 'utf8')); } catch { /* unreadable */ }
+  if (info && info.file && info.snapshot && fs.existsSync(info.snapshot)) {
+    fs.copyFileSync(info.snapshot, info.file);
+    console.log('RECOVERED: an earlier run died holding a mutation.');
+    console.log(`  ${info.file}`);
+    console.log(`  was left as: ${info.what}`);
+    console.log('  It has been restored from the snapshot before anything else ran.\n');
+  } else {
+    console.log('A marker from an earlier run was found but its snapshot is gone.');
+    console.log('Check the sources by hand before trusting anything below.\n');
+  }
+  try { fs.unlinkSync(MARKER); } catch { /* nothing better to do */ }
+}
+recoverFromEarlierRun();          // before the originals are read, or a leftover
+                                  // mutation would be snapshotted as pristine
+
+fs.mkdirSync(SNAP_DIR, { recursive: true });
+const SNAPSHOT = {};
+[CODE, APP, WS].forEach(f => {
+  const dest = path.join(SNAP_DIR, path.basename(f));
+  fs.copyFileSync(f, dest);
+  SNAPSHOT[f] = dest;
+});
+
 const original = fs.readFileSync(CODE, 'utf8');
 
 const MUTANTS = [
@@ -157,11 +205,51 @@ const MUTANTS = [
     from: "    quiz.orderSeed || ''\n  ], [3, 4, 5, 6, 22, 24]);",
     to:   "    ''\n  ], [3, 4, 5, 6, 22, 24]);",
     suite: 'test_exam_release.js'
+  },
+
+  /* --- setup() must never be the thing that loses the records --- */
+  {
+    what: 'setup() clears the sheets again, as it used to',
+    from: "  if (sheet.getLastRow() === 0) sheet.appendRow(headers);",
+    to:   "  sheet.clear(); sheet.appendRow(headers);",
+    suite: 'test_report.js'
+  },
+
+  /* --- the report of one session --- */
+  {
+    what: 'a report may be opened on another instructor\'s session',
+    from: "  if (!isAdmin && normalizeUsername_(row[12]) !== viewer) {\n    return { ok: false, error: 'That session belongs to another instructor.' };\n  }\n\n  const session = {",
+    to:   "  if (false) {\n    return { ok: false, error: 'That session belongs to another instructor.' };\n  }\n\n  const session = {",
+    suite: 'test_report.js'
+  },
+  {
+    what: 'the report lists papers the viewer would not be allowed to open',
+    from: "    if (!isAdmin && normalizeUsername_(r[19]) !== viewer) return;",
+    to:   "    if (false) return;",
+    suite: 'test_report.js'
+  },
+  {
+    what: 'a retake stands on the first sitting rather than the latest',
+    from: "    t.sittings.sort(function (a, b) { return String(b.timestamp).localeCompare(String(a.timestamp)); });",
+    to:   "    t.sittings.sort(function (a, b) { return String(a.timestamp).localeCompare(String(b.timestamp)); });",
+    suite: 'test_report.js'
+  },
+  {
+    what: 'the report counts sittings rather than trainees, inflating every figure',
+    from: "    const id = normId_(r[4]);\n    const known = roster[id];",
+    to:   "    const id = String(r[1] || '');\n    const known = roster[normId_(r[4])];",
+    suite: 'test_report.js'
+  },
+  {
+    what: 'the absent list ignores which group the session was for',
+    from: "      if (String(r[4] || '').trim().toUpperCase() !== session.group.trim().toUpperCase()) return;",
+    to:   "      if (false) return;",
+    suite: 'test_report.js'
   }
 ];
 
 /* The shuffle lives in app.js, not Code.gs, so it gets its own patch target. */
-const APP = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed/app.js';
+// APP is declared at the top, with the snapshot machinery.
 const appOriginal = fs.readFileSync(APP, 'utf8');
 const APP_MUTANTS = [
   {
@@ -260,11 +348,279 @@ const APP_MUTANTS = [
     to:   "    $('studentQuizContainer').addEventListener('change', () => {});",
     suite: 'test_exam_view.js'
   },
+  /* --- the explanation video on the question it belongs to --- */
+  {
+    what: 'the video stops being withheld on an exam, naming the method for a marked question',
+    from: "  return mode !== 'assessment' && reveal !== false;",
+    to:   "  return reveal !== false;",
+    suite: 'test_card_video.js'
+  },
+  {
+    what: 'every card gets a video, not only the ones they got wrong',
+    from: "      setCardVideo(card, q, false);       // cleared here, added back below only if wrong",
+    to:   "      setCardVideo(card, q, showExplanationVideos(reveal));",
+    suite: 'test_card_video.js'
+  },
+  {
+    what: 'the card link is not cleared before it is added, so marking twice stacks them',
+    from: "  const existing = card.querySelector('.card-video');\n  if (existing) existing.remove();",
+    to:   "  ;",
+    suite: 'test_card_video.js'
+  },
+  {
+    what: 'every card is given the first question\'s video instead of its own',
+    from: "  const url = explanationLinkForQuestion(q);\n  if (!url) return;                       // no video for this one; the list says so",
+    to:   "  const url = explanationLinkForQuestion(currentQuiz[0]);\n  if (!url) return;",
+    suite: 'test_card_video.js'
+  },
+  {
+    what: 'clearing the answers leaves the videos behind, still naming the wrong ones',
+    from: "    const video = card.querySelector('.card-video');\n    if (video) video.remove();",
+    to:   "    ;",
+    suite: 'test_card_video.js'
+  },
+  {
+    what: 'a reviewed paper puts a video on every question, not only the missed ones',
+    from: "      ${verdict === 'wrong' ? reviewVideoLink(q) : ''}",
+    to:   "      ${reviewVideoLink(q)}",
+    suite: 'test_card_video.js'
+  },
+  {
+    what: 'every reviewed question is given the first question\'s video',
+    from: "  const url = q ? explanationLinkForQuestion(q) : '';",
+    to:   "  const url = q ? (window.EXPLANATION_VIDEO_LINKS.ch12 || {})['1'] : '';",
+    suite: 'test_card_video.js'
+  },
   {
     what: 'a legacy attempt is rebuilt on a fresh stream instead of the old one',
     from: "    selected = shuffle(selected, rng);\n  }\n  if (orderSeed) selected = shuffleChoicesOf(selected, orderSeed);",
     to:   "    selected = shuffle(selected, seededRandom(seed + '|order'));\n  }\n  if (orderSeed) selected = shuffleChoicesOf(selected, orderSeed);",
     suite: 'test_shuffle.js'
+  },
+
+  /* --- the report of one session --- */
+  {
+    what: 'the report pass mark slips to the 50 used by the other score bands',
+    from: "const REPORT_PASS_MARK = 70;",
+    to:   "const REPORT_PASS_MARK = 50;",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'the report colours rows on 80/50 instead of pass and fail',
+    from: "const reportBand = p => (p >= REPORT_PASS_MARK ? 'good' : 'bad');",
+    to:   "const reportBand = p => scoreBand(p);",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'trainees are listed best first, burying whoever needs help',
+    from: "  return a.percent - b.percent || String(a.name || '').localeCompare(String(b.name || ''));",
+    to:   "  return b.percent - a.percent || String(a.name || '').localeCompare(String(b.name || ''));",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'groups come out in name order rather than weakest first',
+    from: "  }).sort((a, b) => a.stats.average - b.stats.average || String(a.name).localeCompare(String(b.name)));",
+    to:   "  }).sort((a, b) => String(a.name).localeCompare(String(b.name)));",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'full marks are counted off the rounded percentage, so 299/300 becomes one',
+    from: "    full: list.filter(t => t.total > 0 && t.score === t.total).length,",
+    to:   "    full: list.filter(t => t.percent >= 100).length,",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'the sessions list is left on screen underneath the report',
+    from: "  if ($('sessionsWorkspace')) $('sessionsWorkspace').hidden = true;",
+    to:   "  if ($('sessionsWorkspace')) $('sessionsWorkspace').hidden = false;",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'the report is never marked open, so printing prints the whole app',
+    from: "  document.body.classList.add('report-open');",
+    to:   "  document.body.classList.remove('report-open');",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'Back from a paper leaves the instructor nowhere',
+    from: "      if (t.closest('.back-to-profile')) { renderSessionReport(); return true; }",
+    to:   "      if (t.closest('.back-to-profile')) { return true; }",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'only exams get a Report button',
+    from: '        <td class="row-actions"><button type="button" class="icon-btn open-report"\n             data-code="${escapeHtml(s.sessionCode)}">Report</button>${exam',
+    to:   '        <td class="row-actions">${exam',
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'an opened paper does not say whose it is',
+    from: "        ${view.self ? '' : `<p class=\"profile-sub attempt-who\">",
+    to:   "        ${true ? '' : `<p class=\"profile-sub attempt-who\">",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'the group name leaves the table head, so print stops repeating it',
+    from: "          <thead>\n            <!-- The group name lives in the thead",
+    to:   "          <thead></thead><tbody>\n            <!-- The group name lives in the thead",
+    suite: 'test_report_ui.js'
+  },
+  {
+    what: 'the group table stops saying which group it is',
+    from: '            <tr><th class="group-th" colspan="4">Group ${escapeHtml(g.name)}',
+    to:   '            <tr><th class="group-th" colspan="4">Results',
+    suite: 'test_report_ui.js'
+  }
+];
+
+/* The worksheet exporter is a third file, and a third patch target. Most of
+ * these are LaTeX-level: they only show up when pdflatex is actually run over a
+ * paper drawn from the real bank, which is what test_worksheet.js does. */
+// WS is declared at the top, with the snapshot machinery.
+const wsOriginal = fs.readFileSync(WS, 'utf8');
+const WS_MUTANTS = [
+  {
+    what: 'a session name stops being escaped, so one & kills the compile',
+    from: "    .replace(/([&%$#_{}])/g, '\\\\$1')",
+    to:   "    .replace(/([&%#_{}])/g, '$1')",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'a paragraph break run into the next sentence is left as one control sequence',
+    from: "  s = s.replace(/\\\\par(?=[A-Z])/g, '\\\\par ');",
+    to:   "  s = s;",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the split also breaks \\parbox, which is a real macro',
+    from: "  s = s.replace(/\\\\par(?=[A-Z])/g, '\\\\par ');",
+    to:   "  s = s.replace(/\\\\par(?=[A-Za-z])/g, '\\\\par ');",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the diagram placeholder is left in the worksheet',
+    from: "  s = s.replace(/\\[\\[DIAGRAM\\]\\]/g, diagramTex || '');",
+    to:   "  s = s;",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the tape ruler is handed its reading where its scale should go',
+    from: "\\\\taperuler{${Number(d.start)}}{${Number(d.end)}}{${Number(d.reading)}}",
+    to:   "\\\\taperuler{${Number(d.reading)}}{${Number(d.start)}}{${Number(d.end)}}",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'an image keeps its folder, which is not where the bundle puts it',
+    from: "    const file = String(d.src).replace(/^.*\\//, '');",
+    to:   "    const file = String(d.src);",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the same image is bundled once per question that uses it',
+    from: "      if (out.indexOf(q.diagram.src) === -1) out.push(q.diagram.src);",
+    to:   "      out.push(q.diagram.src);",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the mastery table numbers questions from zero',
+    from: "    byLesson[lesson].push(idx + 1);",
+    to:   "    byLesson[lesson].push(idx);",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'two consecutive questions are written as a range',
+    from: "    if (j - i >= 2) parts.push(`Q${sorted[i]}--Q${sorted[j]}`);",
+    to:   "    if (j - i >= 1) parts.push(`Q${sorted[i]}--Q${sorted[j]}`);",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'an empty paper exports as a blank worksheet instead of being refused',
+    from: "  if (!questions.length) throw new Error('There are no questions to export.');",
+    to:   "  if (false) throw new Error('There are no questions to export.');",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the answer key is written in a different order from the paper',
+    from: "    jsArray('ANSWER', questions.map(q => String(q.answer || 'a').trim())),",
+    to:   "    jsArray('ANSWER', questions.map(q => String(q.answer || 'a').trim()).slice().sort()),",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'pdfLaTeX is not told what a real minus sign is',
+    from: "\\DeclareUnicodeCharacter{2212}{\\ensuremath{-}}",
+    to:   "% no minus declaration",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'pdfLaTeX is not told what a superscript four is',
+    from: "\\DeclareUnicodeCharacter{2074}{\\ensuremath{^{4}}}",
+    to:   "% no superscript-four declaration",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'a fraction outside math mode is left to stop the compile',
+    from: "\\let\\ETdfrac\\dfrac  \\renewcommand{\\dfrac}[2]{\\ensuremath{\\ETdfrac{#1}{#2}}}",
+    to:   "% no dfrac guard",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the zip checksums every entry as zero',
+    from: "  let c = 0 ^ (-1);",
+    to:   "  return 0; let c = 0 ^ (-1);",
+    suite: 'test_worksheet.js'
+  },
+
+  /* --- the fillable header --- */
+  {
+    what: 'the header fields are closed before the last page ships, orphaning its boxes',
+    from: "  \\clearpage\n  \\ws@closetext{Name}%",
+    to:   "  \\ws@closetext{Name}%",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'a header box is left bare in the line, so it lands a slot early',
+    from: "  \\leavevmode\\makebox[#2][l]{%",
+    to:   "  \\leavevmode{%",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'one of the header fields is never closed into a field at all',
+    from: "  \\ws@closetext{Group}%",
+    to:   "  %",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'Clear all goes back to bare resetForm(), which empties the name too',
+    from: "    doc.resetForm(fields);",
+    to:   "    doc.resetForm();",
+    suite: 'test_worksheet.js'
+  }
+];
+
+const WS_APP_MUTANTS = [
+  {
+    what: 'the worksheet is never offered after a session is created',
+    from: "  showWorksheetExport();",
+    to:   "  ;",
+    suite: 'test_worksheet_ui.js'
+  },
+  {
+    what: 'Overleaf is not told to use pdfLaTeX, and the machinery is pdfTeX-only',
+    from: "  const fields = { engine: 'pdflatex' };",
+    to:   "  const fields = {};",
+    suite: 'test_worksheet_ui.js'
+  },
+  {
+    what: 'a paper with photographs is posted as bare LaTeX, without them',
+    from: "  if (built.images.length) {",
+    to:   "  if (false) {",
+    suite: 'test_worksheet_ui.js'
+  },
+  {
+    what: 'the export sends a fresh draw rather than the paper the code was made from',
+    from: "  const built = WorksheetExport.buildWorksheetTex(currentSession, currentQuiz);",
+    to:   "  const built = WorksheetExport.buildWorksheetTex(currentSession, selectQuestionsFor(Object.assign({}, currentSession, { seed: 'other' })).selected);",
+    suite: 'test_worksheet_ui.js'
   }
 ];
 
@@ -288,9 +644,32 @@ try {
   process.exit(1);
 }
 
+/* Every mutant patches a string that must actually be in the file. If one is
+ * missing the source has either moved on or is still carrying a mutation from a
+ * run that died -- and in the second case every result below would be measuring
+ * the mutant rather than the code. Checked up front and fatal, rather than
+ * reported as SKIPPED two hundred lines into the output where it reads like a
+ * footnote. */
+{
+  const sources = { [CODE]: original, [APP]: appOriginal, [WS]: wsOriginal };
+  const missing = [];
+  [[MUTANTS, CODE], [APP_MUTANTS, APP], [WS_MUTANTS, WS], [WS_APP_MUTANTS, APP]]
+    .forEach(([list, file]) => list.forEach(m => {
+      if (!sources[file].includes(m.from)) missing.push(`${path.basename(file)}: ${m.what}`);
+    }));
+  if (missing.length) {
+    console.log('The sources do not match what the mutants expect:\n');
+    missing.forEach(s => console.log('  ' + s));
+    console.log('\nEither the code has moved on and these patterns need updating, or a');
+    console.log('previous run died holding a mutation and the file is still patched.');
+    console.log('Nothing below would mean anything, so this run stops here.');
+    process.exit(1);
+  }
+}
+
 let caught = 0, survived = [];
 console.log('baseline:');
-for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js', 'test_exam_view.js', 'test_exam_confirm.js']) {
+for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js', 'test_exam_view.js', 'test_exam_confirm.js', 'test_report.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js']) {
   try {
     execFileSync('node', ['/tmp/energytech_app/' + suite], { stdio: 'pipe' });
     console.log(`  clean   ${suite}`);
@@ -311,7 +690,17 @@ let inFlight = null;                    // { file, base } while a mutant is appl
 function restoreInFlight() {
   if (!inFlight) return;
   try { fs.writeFileSync(inFlight.file, inFlight.base); } catch { /* nothing better to do */ }
+  try { if (fs.existsSync(MARKER)) fs.unlinkSync(MARKER); } catch { /* ditto */ }
   inFlight = null;
+}
+
+/* Written to disk BEFORE the file is patched and removed after it is put back.
+ * The in-memory restore above is the fast path; this is what survives a kill
+ * the process never gets to see. */
+function markInFlight(file, what) {
+  try {
+    fs.writeFileSync(MARKER, JSON.stringify({ file, snapshot: SNAPSHOT[file], what }, null, 1));
+  } catch { /* the run is still correct, only the crash recovery is lost */ }
 }
 ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach(sig => process.on(sig, () => {
   restoreInFlight();
@@ -333,6 +722,7 @@ function runMutants(list, file, base) {
       continue;
     }
     inFlight = { file, base };
+    markInFlight(file, m.what);
     fs.writeFileSync(file, base.replace(m.from, m.to));
     let failed = false;
     try { execFileSync('node', ['/tmp/energytech_app/' + m.suite], { stdio: 'pipe' }); }
@@ -345,8 +735,10 @@ function runMutants(list, file, base) {
 
 runMutants(MUTANTS, CODE, original);
 runMutants(APP_MUTANTS, APP, appOriginal);
+runMutants(WS_MUTANTS, WS, wsOriginal);
+runMutants(WS_APP_MUTANTS, APP, appOriginal);
 
-const total = MUTANTS.length + APP_MUTANTS.length;
+const total = MUTANTS.length + APP_MUTANTS.length + WS_MUTANTS.length + WS_APP_MUTANTS.length;
 console.log(`\n${caught} of ${total} broken guards were caught by the tests.`);
 if (survived.length) {
   console.log('\nNOT ACTUALLY TESTED:');

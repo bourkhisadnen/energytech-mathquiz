@@ -1275,6 +1275,7 @@ function calculateScore(options = {}) {
     if (card) {
       card.classList.remove('flag-correct', 'flag-wrong', 'flag-unanswered', 'missing-required');
       card.querySelectorAll('.choice').forEach(el => el.classList.remove('correct-choice', 'wrong-choice'));
+      setCardVideo(card, q, false);       // cleared here, added back below only if wrong
     }
     details.push({ quizNumber: idx + 1, originalNumber: q.original_number, lesson: q.lesson, answer: ans, correctAnswer: q.answer, result: !ans ? 'Unanswered' : (ans === q.answer ? 'Correct' : 'Wrong') });
     if (!ans) {
@@ -1289,6 +1290,9 @@ function calculateScore(options = {}) {
         card.classList.add('flag-wrong');
         const chosen = card.querySelector(`.choice[data-choice="${ans}"]`);
         if (chosen) chosen.classList.add('wrong-choice');
+        // The video goes on the question they got wrong, where they are already
+        // looking, rather than only in the list at the foot of the paper.
+        setCardVideo(card, q, showExplanationVideos(reveal));
       }
     }
     if (reveal && card) {
@@ -1332,6 +1336,58 @@ function explanationLinkForQuestion(q) {
   return '';
 }
 
+/* Whether explanation videos may be shown at all, for the list under the paper
+ * and for the link inside each card alike. One rule in one place: two copies of
+ * it could drift, and the way they would drift is a video appearing on an exam
+ * paper -- which hands the trainee the method for a question they are being
+ * marked on. `reveal` is false whenever the marking itself is being withheld. */
+function showExplanationVideos(reveal) {
+  const mode = currentSession && currentSession.mode ? currentSession.mode : 'practice';
+  return mode !== 'assessment' && reveal !== false;
+}
+
+/* The same link the wrong-questions list carries, put inside the question it
+ * belongs to. The list is still there and still complete -- this saves the
+ * trainee scrolling to the bottom and matching Q-numbers by eye to find the one
+ * video they wanted.
+ *
+ * Always removes before it adds, so marking a paper twice cannot leave two
+ * links on one card. */
+function setCardVideo(card, q, show) {
+  if (!card) return;
+  const existing = card.querySelector('.card-video');
+  if (existing) existing.remove();
+  if (!show) return;
+  const url = explanationLinkForQuestion(q);
+  if (!url) return;                       // no video for this one; the list says so
+  const a = document.createElement('a');
+  a.className = 'card-video';
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.title = 'Open the explanation video for this question in a new tab';
+  a.innerHTML = '&#9654; Watch the explanation';
+  card.appendChild(a);
+}
+
+/* The same link again, for a paper being reviewed rather than one just marked.
+ *
+ * A trainee reaches this only through their own record, and the backend refuses
+ * an exam whose results the instructor has not released -- so by the time one
+ * of these cards is on screen the marking is already out, and the video may go
+ * with it. The instructor's two views reach the same cards, where it is no leak
+ * at all.
+ *
+ * Only when the paper could be rebuilt from the bank: `video_ok` is what stops
+ * a generated variant inheriting the original's video, and it lives on the
+ * question rather than on the stored answer. */
+function reviewVideoLink(q) {
+  const url = q ? explanationLinkForQuestion(q) : '';
+  if (!url) return '';
+  return `<a class="card-video" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"
+    title="Open the explanation video for this question in a new tab">&#9654; Watch the explanation</a>`;
+}
+
 function pillList(indices, options = {}) {
   if (!indices.length) return '<span class="list-pill good">None</span>';
   return indices.map(i => {
@@ -1364,7 +1420,7 @@ function renderFeedback(target = 'teacher', reveal = true) {
     return;
   }
 
-  const showVideoLinks = mode !== 'assessment' && reveal;
+  const showVideoLinks = showExplanationVideos(reveal);
   el.innerHTML = `
     <div class="score-line">
       <div class="score-box"><span>Total score</span><strong>${f.correct} / ${f.total}</strong></div>
@@ -1399,6 +1455,10 @@ function clearAnswers(target = activeRole || 'teacher') {
   scope.querySelectorAll('.question-card').forEach(card => {
     card.classList.remove('flag-correct', 'flag-wrong', 'flag-unanswered', 'missing-required');
     card.querySelectorAll('.choice').forEach(el => el.classList.remove('correct-choice', 'wrong-choice'));
+    // A cleared paper is an unmarked paper: the video says which ones they got
+    // wrong just as plainly as the red border does.
+    const video = card.querySelector('.card-video');
+    if (video) video.remove();
   });
   lastFeedback = null;
   studentSubmitted = false;
@@ -2198,6 +2258,9 @@ async function createSession() {
   currentSession = payload.session;
   localStorage.setItem(`energytechSession_${currentSession.sessionCode}`, JSON.stringify(currentSession));
   buildQuizFromSettings(currentSession, 'teacher');
+  // The paper exists now, whether or not the online save goes on to work: the
+  // worksheet is made from the questions, not from the backend.
+  showWorksheetExport();
 
   if (status) {
     status.className = 'feedback empty';
@@ -2246,6 +2309,159 @@ async function createSession() {
   }
 }
 
+
+/* ==========================================================================
+ * Exporting the session as an interactive worksheet
+ *
+ * The paper the instructor just made, as a self-marking PDF. The LaTeX comes
+ * from worksheet_tex.js; what lives here is getting it to Overleaf, which is
+ * the only route to an actual PDF from a page that has no TeX of its own.
+ *
+ * `currentQuiz` is the teacher's reference copy -- the unshuffled paper -- so
+ * the worksheet matches what a trainee sees except on an exam that reshuffles
+ * per launch, where by design no two trainees see the same order either.
+ * ========================================================================== */
+
+/* Photographs are fetched when the panel appears rather than when a button is
+ * pressed. A click handler that awaits a fetch has lost its user gesture by the
+ * time it submits, and the browser blocks the Overleaf tab as a popup. */
+const worksheetImageCache = new Map();
+
+function showWorksheetExport() {
+  const panel = $('worksheetExport');
+  if (!panel) return;
+  panel.hidden = false;
+  const st = $('worksheetExportStatus');
+  if (st) { st.hidden = true; st.className = 'feedback empty'; st.innerHTML = ''; }
+  try {
+    (WorksheetExport.imagesUsedBy(currentQuiz)).forEach(src => {
+      if (worksheetImageCache.has(src)) return;
+      fetch(src)
+        .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status))))
+        .then(buf => worksheetImageCache.set(src, new Uint8Array(buf)))
+        .catch(() => { /* reported when the export is actually asked for */ });
+    });
+  } catch { /* the export button will say what went wrong */ }
+}
+
+function worksheetStatus(kind, html) {
+  const st = $('worksheetExportStatus');
+  if (!st) return;
+  st.hidden = false;
+  st.className = `feedback ${kind}`;
+  st.innerHTML = html;
+}
+
+/* The .tex plus whatever images it references, ready to be zipped or posted.
+ * Throws rather than exporting a worksheet with a missing photograph in it. */
+function buildWorksheetBundle() {
+  if (!currentSession || !currentQuiz || !currentQuiz.length) {
+    throw new Error('Create a session first — there is no paper to export yet.');
+  }
+  const built = WorksheetExport.buildWorksheetTex(currentSession, currentQuiz);
+  const missing = built.images.filter(src => !worksheetImageCache.has(src));
+  return { built, missing };
+}
+
+const worksheetFileName = ext =>
+  `worksheet_${String((currentSession && currentSession.sessionCode) || 'session').replace(/[^\w-]/g, '')}.${ext}`;
+
+function worksheetZipBytes(built) {
+  const enc = new TextEncoder();
+  const files = [{ name: 'worksheet.tex', data: enc.encode(built.tex) }];
+  built.images.forEach(src => {
+    files.push({ name: src.replace(/^.*\//, ''), data: worksheetImageCache.get(src) });
+  });
+  return WorksheetExport.buildZip(files);
+}
+
+function downloadWorksheet() {
+  let bundle;
+  try { bundle = buildWorksheetBundle(); }
+  catch (err) { worksheetStatus('bad', escapeHtml(err.message)); return; }
+  const { built, missing } = bundle;
+
+  // A paper with photographs has to travel as a zip; one without is a single
+  // file, which is friendlier to hand around.
+  const useZip = built.images.length > 0 && !missing.length;
+  const blob = useZip
+    ? new Blob([worksheetZipBytes(built)], { type: 'application/zip' })
+    : new Blob([built.tex], { type: 'application/x-tex' });
+  const name = worksheetFileName(useZip ? 'zip' : 'tex');
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+
+  worksheetStatus('good',
+    `<strong>${escapeHtml(name)}</strong> downloaded — ${built.questionCount} question${built.questionCount === 1 ? '' : 's'}.
+     Compile it twice with <span class="mono">pdflatex</span>.`
+    + (missing.length
+        ? `<p><strong>Without its pictures.</strong> ${missing.length} image${missing.length === 1 ? '' : 's'}
+           could not be read, so ${missing.length === 1 ? 'that question is' : 'those questions are'} exported
+           without ${missing.length === 1 ? 'it' : 'them'}. Reload the page and try again.</p>`
+        : ''));
+}
+
+/* Overleaf takes either the LaTeX itself or a URL to fetch, and a base64 data
+ * URL counts as a URL -- which is how a worksheet with photographs gets there
+ * without anything having to be hosted first. */
+const OVERLEAF_POST_LIMIT = 6 * 1024 * 1024;
+
+function openWorksheetInOverleaf() {
+  let bundle;
+  try { bundle = buildWorksheetBundle(); }
+  catch (err) { worksheetStatus('bad', escapeHtml(err.message)); return; }
+  const { built, missing } = bundle;
+
+  if (missing.length) {
+    worksheetStatus('warn',
+      `Still fetching ${missing.length} image${missing.length === 1 ? '' : 's'} for this paper. Give it a moment and press the button again.`);
+    return;
+  }
+
+  const fields = { engine: 'pdflatex' };
+  if (built.images.length) {
+    const bytes = worksheetZipBytes(built);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    const b64 = btoa(bin);
+    if (b64.length > OVERLEAF_POST_LIMIT) {
+      worksheetStatus('bad',
+        'This paper carries too many pictures to post to Overleaf. Use <strong>Download .tex</strong> and upload the zip to Overleaf yourself.');
+      return;
+    }
+    fields.snip_uri = `data:application/zip;base64,${b64}`;
+    fields.main_document = 'worksheet.tex';
+  } else {
+    fields.snip = built.tex;
+  }
+
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = 'https://www.overleaf.com/docs';
+  form.target = '_blank';
+  form.rel = 'noopener';
+  form.style.display = 'none';
+  Object.keys(fields).forEach(k => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = k;
+    input.value = fields[k];
+    form.appendChild(input);
+  });
+  document.body.appendChild(form);
+  form.submit();
+  setTimeout(() => form.remove(), 0);
+
+  worksheetStatus('good',
+    `Sent ${built.questionCount} question${built.questionCount === 1 ? '' : 's'} to Overleaf in a new tab.
+     Press <strong>Recompile</strong> there, then download the PDF. If no tab opened, allow pop-ups for this
+     site, or use <strong>Download .tex</strong>.`);
+}
 
 function getJsonp(url, params = {}, prefix = 'energytechJsonp', timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
@@ -2496,6 +2712,8 @@ function init() {
 
   // Instructor tools
   if ($('createSessionBtn')) $('createSessionBtn').addEventListener('click', createSession);
+  if ($('overleafExportBtn')) $('overleafExportBtn').addEventListener('click', openWorksheetInOverleaf);
+  if ($('texExportBtn')) $('texExportBtn').addEventListener('click', downloadWorksheet);
   document.addEventListener('click', (e) => {
     const copyBtn = e.target.closest && e.target.closest('.copy-session-btn');
     if (copyBtn) { copySessionCodeFromButton(copyBtn); return; }
@@ -3537,7 +3755,7 @@ function paint(view, html) {
 }
 
 async function loadHistoryInto(view, params) {
-  paint(view, '<p class="pane-empty">Loading&hellip;</p>');
+  paint(view, '<p class="pane-empty is-loading">Loading&hellip;</p>');
   try {
     const data = await rosterCall(view.historyAction,
       Object.assign(view.auth(), params), 'energytechHistory', 1);
@@ -3794,7 +4012,7 @@ let retakePanel = '';
 let retakeData = null;
 
 function renderRetakePanel(code) {
-  if (!retakeData || retakeData.sessionCode !== code) return '<p class="pane-empty">Loading&hellip;</p>';
+  if (!retakeData || retakeData.sessionCode !== code) return '<p class="pane-empty is-loading">Loading&hellip;</p>';
   const list = retakeData.trainees || [];
   if (!list.length) return '<p class="pane-empty">Nobody has sat this exam yet.</p>';
   return `<table class="dashboard-table retake-table">
@@ -3945,7 +4163,10 @@ async function openSessionReport(code) {
   if ($('sessionReportView')) $('sessionReportView').hidden = false;
   document.body.classList.add('report-open');
   if ($('reportCrumb')) $('reportCrumb').textContent = code;
-  paint(REPORT_VIEW, '<p class="pane-empty">Loading the report&hellip;</p>');
+  // Marked as the placeholder it is. Sharing a bare .pane-empty with the
+  // "nobody sat this" message meant anything reading the pane could pick up
+  // "Loading..." and believe it was the answer.
+  paint(REPORT_VIEW, '<p class="pane-empty is-loading">Loading the report&hellip;</p>');
   if ($('sessionReportView')) $('sessionReportView').scrollIntoView({ behavior: 'smooth', block: 'start' });
   try {
     const data = await rosterCall('session_report',
@@ -4077,7 +4298,7 @@ function renderSessionReport() {
 async function openAttempt(view, attemptId) {
   const back = `<div class="button-row"><button type="button" class="secondary back-to-profile">${
     view.self ? '&#8592; Back to my results' : 'Back to ' + (view.backLabel || 'the profile')}</button></div>`;
-  paint(view, '<p class="pane-empty">Loading the answers&hellip;</p>');
+  paint(view, '<p class="pane-empty is-loading">Loading the answers&hellip;</p>');
   try {
     const data = await rosterCall(view.attemptAction,
       Object.assign(view.auth(), { attemptId }), 'energytechAttempt', 1);
@@ -4143,6 +4364,7 @@ function renderAttempt(view, data) {
         ${it.originalNumber ? `<span class="original">Original Q${it.originalNumber}</span>` : ''}
         <span class="verdict ${verdict}">${label}</span></div>
       ${body}
+      ${verdict === 'wrong' ? reviewVideoLink(q) : ''}
     </article>`;
   }).join('');
 

@@ -172,9 +172,25 @@ Trainees see after submission:
 - correct answers highlighted
 - feedback/details
 
+**The explanation video sits on the question itself.** Every question they got wrong grows a
+**▶ Watch the explanation** button inside its own box, opening the same video the wrong-questions
+list at the foot of the page points to. On a long paper that saves scrolling to the bottom and
+matching Q-numbers by eye. A question with no QR code on the printed worksheet has no video, so
+its box stays plain — the list still names it. Clearing the answers takes the buttons away with
+the marking.
+
 ### Assessment Mode
 
 Trainees see only a submission confirmation. Detailed feedback is hidden from trainees but still saved for the instructor dashboard.
+
+**Once the instructor releases the results**, the trainee can open the exam under **My results**
+and the paper comes back question by question — their answer, the correct one, and on each
+question they got wrong the same **▶ Watch the explanation** button. Before release there is
+nothing to open, and no video anywhere.
+
+An exam still carries no video while it is being sat or straight after it is handed in, and none
+in the instructor's own preview of an exam either: the video names the method for a question
+being scored, so it waits until the marking is out.
 
 ## Required answers
 
@@ -609,3 +625,44 @@ The **Print** button prints the report and nothing else — no page header, no n
 ### Who can open what
 
 An instructor can report on the sessions they ran; an admin can report on anybody's. A paper the viewer would not be allowed to open is not listed at all, so the report never offers a row that then refuses to open.
+
+
+## Exporting a session as an interactive worksheet
+
+After **Create session code**, an **Interactive worksheet** panel appears under the code. It turns the paper the app just drew into a self-marking PDF worksheet: one radio button per answer, a running total, a **Calculate Score** button that lists the wrong and unanswered questions, and a mastery table coloured by objective. It is the same design as the hand-written Chapter 03 worksheet, generated from whatever the session covers.
+
+### Why LaTeX, and how you get a PDF
+
+The question bank is stored **as LaTeX** — that is what the printed worksheets were set in, and it is why the app can show a proper `\dfrac`, a column-arithmetic stack and a TikZ circuit. The export takes those bodies through untouched, so a fraction in the worksheet is the same fraction the trainee sees on screen. Nothing is re-drawn or approximated.
+
+That means the worksheet is produced as a `.tex` file, and something has to compile it. Two buttons:
+
+- **Open in Overleaf** — posts the worksheet to Overleaf, which compiles it in your browser. Press **Recompile** there, then download the PDF. No LaTeX installation. If the paper uses photographs they are bundled and sent with it automatically.
+- **Download .tex** — the file itself, for compiling locally. Run `pdflatex` **twice**:
+
+  ```
+  pdflatex worksheet.tex
+  pdflatex worksheet.tex
+  ```
+
+  It is pdfLaTeX only: the interactive form fields are built with pdfTeX's own `\pdfannot` and `\pdfobj` primitives, so XeLaTeX and LuaLaTeX will not do. If the paper uses photographs the download is a `.zip` instead — unpack it and compile `worksheet.tex` from inside the folder, or upload the zip to Overleaf.
+
+Open the finished PDF in **Adobe Acrobat Reader**. The marking is form JavaScript, which Chrome's and Firefox's built-in PDF viewers do not run — the worksheet still prints and still fills in there, it just will not score itself.
+
+### The answer key is inside the file
+
+It has to be: that is what the PDF marks itself against. Anyone who opens the worksheet in a text editor can read it, and this is true of the PDF as well as the `.tex`. **Do not give the file to trainees before they have sat the paper.** The panel says so next to the buttons, on every export, exam or practice.
+
+If you want trainees to sit the paper without the answers travelling with it, use the session code and the app — the online route is the one where marks are held back until you release them.
+
+### What the worksheet contains
+
+- **A header** with **fillable boxes** for name, EnergyTech ID and group, and the session's own name, code, intake and group on the right. The boxes are real PDF form fields: the trainee types into them on screen, and what they type is kept when they save the file, exactly like their answers. Each box is **one field with a box on every page**, so typing the name on page one fills it in on page four as well — which also means a printed copy carries the name on every sheet. **Clear all** clears the answers and leaves the name, ID and group alone.
+- **The questions**, two to a column, in the order the app drew them — the teacher's reference copy. An exam with *shuffle each launch* gives every trainee a different order by design, so no printed paper can match all of them; the worksheet uses the base order.
+- **A score panel**: a live total, then **Calculate Score** for the percentage and the lists of wrong and unanswered questions.
+- **An objective coverage & mastery table**, built from the lesson codes of the questions actually drawn — each objective, how many items it has, which question numbers, and a cell that colours red through amber to green when you press Calculate Score.
+
+### Limits
+
+- Overleaf's importer takes the worksheet in a single POST. A paper carrying a great many photographs can exceed that; the panel says so and points you at the download.
+- A question whose lesson code covers two objectives (there are eight in the bank, e.g. `1-1.1 1-1.2`) forms its own row in the mastery table.

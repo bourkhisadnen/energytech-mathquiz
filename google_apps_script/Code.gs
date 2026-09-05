@@ -37,50 +37,93 @@ const ADMIN_DEFAULT_PASSWORD = '12341234';
 // How long a login stays valid before an instructor has to log in again.
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+const SESSION_HEADERS = [
+  'Timestamp', 'Session Code', 'Session Name', 'Group', 'Mode',
+  'Question Set', 'Question Set Key', 'Seed', 'Question Count',
+  'Order Mode', 'Show Original Numbers', 'Require All',
+  'Owner Username', 'Owner Display Name',
+  'Intake', 'Allow Walk-In', 'Shuffle Each Launch', 'Results Published'
+];
+
+const ATTEMPT_HEADERS = [
+  'Timestamp', 'Attempt ID', 'Name', 'Group', 'EnergyTech ID',
+  'Session Code', 'Session Name', 'Mode',
+  'Question Set', 'Question Set Key', 'Seed', 'Question Count', 'Order Mode',
+  'Score', 'Total', 'Percentage', 'Wrong Questions', 'Unanswered Questions',
+  'User Agent', 'Owner Username', 'Owner Display Name',
+  'Intake', 'Registered', 'Order Seed'
+];
+
+const ITEM_HEADERS = [
+  'Timestamp', 'Attempt ID', 'Name', 'Group', 'EnergyTech ID',
+  'Session Code', 'Session Name', 'Mode',
+  'Question Set', 'Question Set Key', 'Seed',
+  'Quiz Question', 'Original Question', 'Lesson',
+  'Trainee Answer', 'Correct Answer', 'Result',
+  'Owner Username', 'Owner Display Name'
+];
+
+/* Set this to the exact words in the error message to arm eraseAllRecords_().
+ * Left empty, that function refuses to run. Nothing else reads it. */
+const CONFIRM_ERASE = '';
+
+/* Creates the sheets and their header rows. Safe to run whenever, against a
+ * live spreadsheet, as often as you like: a sheet that already holds rows is
+ * left exactly as it was.
+ *
+ * It did not always work that way. Every run used to clear Sessions, Attempts
+ * and ItemResponses back to their headers -- which is a reasonable way to
+ * prepare an empty spreadsheet, and a disastrous thing to do to one in use.
+ * Pressing Run in the Apps Script editor is how anybody checks a deployment is
+ * alive, and doing so threw away every paper on record. Erasing is now a
+ * separate function that has to be armed by hand, and this one only ever adds
+ * what is missing. */
 function setup() {
+  ensureSheetWithHeaders_(SHEET_SESSIONS, SESSION_HEADERS);
+  ensureSheetWithHeaders_(SHEET_ATTEMPTS, ATTEMPT_HEADERS);
+  ensureSheetWithHeaders_(SHEET_ITEMS, ITEM_HEADERS);
+
+  // Instructors has never been cleared here, so re-running setup() cannot
+  // delete colleague accounts. It is created only if missing.
+  getOrCreateInstructorsSheet_();
+}
+
+/* Create the sheet if it is missing, write the header row if the sheet is
+ * empty, and touch nothing otherwise. The one thing it must never do is remove
+ * a row somebody's mark is sitting in. */
+function ensureSheetWithHeaders_(name, headers) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) sheet = ss.insertSheet(name);
+  if (sheet.getLastRow() === 0) sheet.appendRow(headers);
+  sheet.setFrozenRows(1);
+  return sheet;
+}
 
-  let sessions = ss.getSheetByName(SHEET_SESSIONS);
-  if (!sessions) sessions = ss.insertSheet(SHEET_SESSIONS);
-  sessions.clear();
-  sessions.appendRow([
-    'Timestamp', 'Session Code', 'Session Name', 'Group', 'Mode',
-    'Question Set', 'Question Set Key', 'Seed', 'Question Count',
-    'Order Mode', 'Show Original Numbers', 'Require All',
-    'Owner Username', 'Owner Display Name',
-    'Intake', 'Allow Walk-In', 'Shuffle Each Launch', 'Results Published'
-  ]);
-
-  let attempts = ss.getSheetByName(SHEET_ATTEMPTS);
-  if (!attempts) attempts = ss.insertSheet(SHEET_ATTEMPTS);
-  attempts.clear();
-  attempts.appendRow([
-    'Timestamp', 'Attempt ID', 'Name', 'Group', 'EnergyTech ID',
-    'Session Code', 'Session Name', 'Mode',
-    'Question Set', 'Question Set Key', 'Seed', 'Question Count', 'Order Mode',
-    'Score', 'Total', 'Percentage', 'Wrong Questions', 'Unanswered Questions',
-    'User Agent', 'Owner Username', 'Owner Display Name',
-    'Intake', 'Registered', 'Order Seed'
-  ]);
-
-  let items = ss.getSheetByName(SHEET_ITEMS);
-  if (!items) items = ss.insertSheet(SHEET_ITEMS);
-  items.clear();
-  items.appendRow([
-    'Timestamp', 'Attempt ID', 'Name', 'Group', 'EnergyTech ID',
-    'Session Code', 'Session Name', 'Mode',
-    'Question Set', 'Question Set Key', 'Seed',
-    'Quiz Question', 'Original Question', 'Lesson',
-    'Trainee Answer', 'Correct Answer', 'Result',
-    'Owner Username', 'Owner Display Name'
-  ]);
-
-  sessions.setFrozenRows(1);
-  attempts.setFrozenRows(1);
-  items.setFrozenRows(1);
-
-  // Instructors is intentionally NOT cleared here so re-running setup()
-  // never deletes colleague accounts. It's created only if missing.
+/* Empties Sessions, Attempts and ItemResponses and puts their headers back.
+ *
+ * This throws away every recorded attempt and cannot be undone from inside the
+ * script. It is deliberately awkward: set CONFIRM_ERASE at the top of this file
+ * to the words in the message below, run this once, then set it back to ''.
+ * Nothing in the app calls it, and it is not reachable over the web. */
+function eraseAllRecords_() {
+  if (CONFIRM_ERASE !== 'ERASE EVERYTHING') {
+    throw new Error(
+      'eraseAllRecords_ is not armed, and has done nothing. It deletes every ' +
+      'recorded attempt. If that is really what you want, set CONFIRM_ERASE at ' +
+      'the top of Code.gs to "ERASE EVERYTHING", run this once, then set it ' +
+      'back to "". Take a copy of the spreadsheet first.');
+  }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  [[SHEET_SESSIONS, SESSION_HEADERS],
+   [SHEET_ATTEMPTS, ATTEMPT_HEADERS],
+   [SHEET_ITEMS, ITEM_HEADERS]].forEach(function (pair) {
+    const sheet = ss.getSheetByName(pair[0]);
+    if (!sheet) return;
+    sheet.clear();
+    sheet.appendRow(pair[1]);
+    sheet.setFrozenRows(1);
+  });
   getOrCreateInstructorsSheet_();
 }
 
@@ -170,6 +213,8 @@ function doGet(e) {
       data = retakeAllow_(params);
     } else if (params.action === 'retake_list') {
       data = retakeList_(params);
+    } else if (params.action === 'session_report') {
+      data = sessionReport_(params);
     } else if (params.action === 'trainee_move') {
       data = traineeMove_(params);
     } else if (params.action === 'trainee_set_account') {
@@ -1609,6 +1654,126 @@ function sessionPublish_(params, release) {
   };
 }
 
+/* ------------------------- one session, reported on ----------------------- */
+
+/* Everything one sitting of one session produced: who sat it, what each of them
+ * scored, and the attempt id needed to open any one paper question by question.
+ *
+ * Marks are not held back here. Releasing is what lets the *trainees* see
+ * theirs; the instructor is the person deciding whether to release, and cannot
+ * decide without looking -- so this returns the figures either way, exactly as
+ * traineeHistory_ does.
+ *
+ * A trainee who sat twice -- the instructor granted another sitting after a
+ * tablet died mid-paper -- appears once, standing on their most recent sitting,
+ * with the earlier ones alongside it. Counting a retake as a second trainee
+ * would put the abandoned paper into every average in the report. */
+function sessionReport_(params) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  ensureSheets_();
+
+  const code = String(params.sessionCode || '').toUpperCase().trim();
+  if (!code) return { ok: false, error: 'No session named.' };
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const isAdmin = auth.instructor.role === 'admin';
+  const viewer = normalizeUsername_(auth.instructor.username);
+
+  const sheet = ss.getSheetByName(SHEET_SESSIONS);
+  const rowNumber = sessionRowNumber_(sheet, code);
+  if (!rowNumber) return { ok: false, error: 'Session ' + code + ' not found.' };
+
+  const row = sheet.getRange(rowNumber, 1, 1, SESSION_HEADERS.length).getValues()[0];
+  if (!isAdmin && normalizeUsername_(row[12]) !== viewer) {
+    return { ok: false, error: 'That session belongs to another instructor.' };
+  }
+
+  const session = {
+    timestamp: row[0] instanceof Date ? row[0].toISOString() : String(row[0] || ''),
+    sessionCode: code,
+    sessionName: String(row[2] || ''),
+    group: String(row[3] || ''),
+    intake: String(row[14] || ''),
+    mode: String(row[4] || 'practice'),
+    questionSet: String(row[5] || ''),
+    questionCount: Number(row[8] || 0),
+    shuffleEachLaunch: row[16] === true || String(row[16]).toUpperCase() === 'TRUE',
+    published: Boolean(row[17])
+  };
+
+  // The roster is the authority on a trainee's name: it can be corrected after
+  // a paper has been sat, and a report should show who somebody is now rather
+  // than the spelling that happened to be on the row that day.
+  const roster = {};
+  rowsOf_(traineesSheet_()).forEach(function (r) {
+    const id = normId_(r[1]);
+    if (id) roster[id] = { name: String(r[2] || ''), intake: String(r[3] || ''), group: String(r[4] || '') };
+  });
+
+  const byTrainee = {};
+  rowsOf_(ss.getSheetByName(SHEET_ATTEMPTS)).forEach(function (r) {
+    if (String(r[5] || '').toUpperCase().trim() !== code) return;
+    // Listed only if this viewer could also open it. A row the report offers
+    // and attempt_detail then refuses is worse than a row left out.
+    if (!isAdmin && normalizeUsername_(r[19]) !== viewer) return;
+
+    const id = normId_(r[4]);
+    const known = roster[id];
+    if (!byTrainee[id]) {
+      byTrainee[id] = {
+        energytechId: String(r[4] || ''),
+        name: (known && known.name) || String(r[2] || ''),
+        // The group as sat: that is who was in the room. The roster fills it in
+        // only when the row carries none, as a walk-in's may not.
+        group: String(r[3] || '') || (known && known.group) || '',
+        intake: String(r[21] || '') || (known && known.intake) || '',
+        onRoster: Boolean(known),
+        sittings: []
+      };
+    }
+    byTrainee[id].sittings.push({
+      attemptId: String(r[1] || ''),
+      timestamp: r[0] instanceof Date ? r[0].toISOString() : String(r[0] || ''),
+      score: Number(r[13] || 0),
+      total: Number(r[14] || 0),
+      percent: Number(r[15] || 0),
+      registered: String(r[22] || '')
+    });
+  });
+
+  const trainees = Object.keys(byTrainee).map(function (id) {
+    const t = byTrainee[id];
+    t.sittings.sort(function (a, b) { return String(b.timestamp).localeCompare(String(a.timestamp)); });
+    const latest = t.sittings[0];
+    t.attemptId = latest.attemptId;
+    t.timestamp = latest.timestamp;
+    t.score = latest.score;
+    t.total = latest.total;
+    t.percent = latest.percent;
+    t.registered = latest.registered;
+    t.sittingCount = t.sittings.length;
+    return t;
+  });
+
+  // Who was expected and did not sit. An exam report that lists only the papers
+  // handed in cannot tell an instructor that four of their group are missing,
+  // which is the first thing they need to know.
+  const absent = [];
+  if (session.intake && session.group) {
+    rowsOf_(traineesSheet_()).forEach(function (r) {
+      const id = normId_(r[1]);
+      if (!id || byTrainee[id]) return;
+      if (String(r[3] || '').trim().toUpperCase() !== session.intake.trim().toUpperCase()) return;
+      if (String(r[4] || '').trim().toUpperCase() !== session.group.trim().toUpperCase()) return;
+      absent.push({ energytechId: String(r[1] || ''), name: String(r[2] || ''),
+                    intake: String(r[3] || ''), group: String(r[4] || '') });
+    });
+  }
+
+  return { ok: true, session: session, trainees: trainees, absent: absent };
+}
+
 function buildSummary_(params) {
   const auth = requireAuth_(params);
   if (!auth.ok) return auth;
@@ -1726,10 +1891,10 @@ function buildSummary_(params) {
 function ensureSheets_() {
   if (ENSURED_.__all) return;              // already done earlier in this request
   ENSURED_.__all = true;
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss.getSheetByName(SHEET_SESSIONS) || !ss.getSheetByName(SHEET_ATTEMPTS) || !ss.getSheetByName(SHEET_ITEMS)) {
-    setup();
-  }
+  // setup() adds only what is missing, so it can be called on every request:
+  // that also repairs a sheet somebody emptied by hand, which the old
+  // "only if the sheet is absent" test walked straight past.
+  setup();
   getOrCreateInstructorsSheet_();
   const attemptsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_ATTEMPTS);
   if (attemptsSheet) ensureHeaders_(attemptsSheet, ['Intake', 'Registered', 'Order Seed']);

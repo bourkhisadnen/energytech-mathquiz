@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>EnergyTech Mathematics Quiz App</title>
   <link rel="manifest" href="manifest.webmanifest" />
+  <!-- Without this every browser asks the server root for /favicon.ico and is
+       told 404, on every load. The icon was always here; nothing pointed at it. -->
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="style.css" />
   <meta name="theme-color" content="#006fae" />
 </head>
@@ -207,6 +210,25 @@
           <button id="copyReferenceBtn" class="secondary">Copy teacher reference</button>
         </div>
         <div id="sessionStatus" class="feedback empty">Create a session, then give the code to trainees.</div>
+
+        <!-- The same paper as a self-marking PDF worksheet. Hidden until there
+             is a session to export. -->
+        <div id="worksheetExport" class="worksheet-export" hidden>
+          <h3>Interactive worksheet</h3>
+          <p class="hint">The same questions as a self-marking PDF: one radio button per answer, a live
+            score, and a mastery table by objective. Overleaf compiles it in your browser — press
+            <strong>Recompile</strong> there, then download the PDF. Open the PDF in Adobe Acrobat
+            Reader; the marking is form JavaScript, which Chrome's own viewer does not run.</p>
+          <div class="button-row">
+            <button id="overleafExportBtn" type="button">Open in Overleaf</button>
+            <button id="texExportBtn" type="button" class="secondary">Download .tex</button>
+          </div>
+          <p class="worksheet-warning" id="worksheetWarning">
+            <strong>The answer key is inside the file.</strong> It has to be, for the PDF to mark
+            itself — anyone who opens the worksheet in a text editor can read it. Do not give this
+            file to trainees before they have sat the paper.</p>
+          <div id="worksheetExportStatus" class="feedback empty" hidden></div>
+        </div>
       </section>
 
       <section id="teacherPreviewArea" hidden>
@@ -504,6 +526,7 @@
   <script src="question_bank.js"></script>
   <script src="question_bank_ch03.js"></script>
   <script src="explanation_links.js"></script>
+  <script src="worksheet_tex.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'energytech-quiz-app-v46-session-report';
+const CACHE_NAME = 'energytech-quiz-app-v49-video-on-the-question';
 const FILES = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const FILES = [
   './question_bank.js',
   './question_bank_ch03.js',
   './explanation_links.js',
+  './worksheet_tex.js',
   './manifest.webmanifest',
   './icon.svg',
   './images/original_q07_circuit.png',
