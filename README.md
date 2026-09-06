@@ -666,3 +666,71 @@ If you want trainees to sit the paper without the answers travelling with it, us
 
 - Overleaf's importer takes the worksheet in a single POST. A paper carrying a great many photographs can exceed that; the panel says so and points you at the download.
 - A question whose lesson code covers two objectives (there are eight in the bank, e.g. `1-1.1 1-1.2`) forms its own row in the mastery table.
+
+## Forgotten passwords
+
+There is no email in this app, so nobody can be sent a reset link. A reset is
+therefore one person doing it for another who is standing in front of them: an
+admin presses a button, reads out the temporary password it gives back, and the
+account has to choose its own before it can do anything else.
+
+### Resetting a trainee
+
+**Instructor Mode → the roster workspace**, find the trainee, press **Reset
+password** on their row. The button is only there for a trainee whose account is
+active:
+
+- a trainee who has never made an account has nothing to reset — they are told to
+  use **First time? Create my account** instead;
+- a revoked account has to be turned back on first, otherwise a reset would hand
+  out a working password for an account you had deliberately closed.
+
+**Only admins can reset a trainee.** A plain instructor cannot, the same rule as
+every other roster edit.
+
+### Resetting an instructor
+
+**Instructor Mode → Instructor accounts (admin) → Reset password** on the
+colleague's row. An admin may reset a fellow admin — that is the whole answer to
+"what if the admin forgets" — but not themselves; their own row has no button,
+because **Change my password** is the route for a password you still know.
+
+### What the temporary password is
+
+Eight characters in two groups of four, e.g. `K7RM-P2XQ`, drawn from an alphabet
+with no `O`, `0`, `I`, `l` or `1` in it, so it survives being read out loud or
+copied off a screen. It is shown **once**, on the screen of the admin who pressed
+the button, with a **Copy** button. It is not stored anywhere readable: the sheet
+holds only its hash, and no listing — roster, roster summary or instructor
+accounts — ever returns it. If it is lost before it is used, reset again.
+
+### What a reset does immediately
+
+- The old password stops working.
+- **Every device that account was logged in on is signed out**, right then. Somebody
+  who has forgotten a password may well have lost the phone it was signed in on,
+  and this is the moment to close that.
+- The account is flagged **must change password**. At the next login it can do
+  exactly one thing: choose a new password. The roster, the dashboard, sessions,
+  a trainee's own history — all refuse until it does, and the app puts up the
+  change-password panel rather than the normal screen. A trainee in this state
+  cannot sit a paper either; the submission is refused rather than being quietly
+  recorded as a walk-in under the same name.
+- Choosing the new password clears the flag and everything opens up. The temporary
+  one is spent at that moment.
+
+### If the only admin is locked out
+
+Nothing inside the app can rescue a lone admin — a reset needs a second admin to
+press the button. **Promote a second admin now, before you need one**
+(**Instructor accounts (admin) → Make admin**); the panel says so when you are the
+only one. Failing that, the account rows live in the `Instructors` tab of the
+Google Sheet and the owner of that Sheet can clear the hash and salt of the admin
+row by hand, which lets that username sign up again.
+
+### Upgrading an existing deployment
+
+The reset needs one new column, **Must Change Password**, on both the `Trainees`
+and `Instructors` tabs. It is added automatically the first time the new
+`Code.gs` answers a request — existing rows are untouched and nothing is
+rewritten. There is no migration step to run.

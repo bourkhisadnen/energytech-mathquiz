@@ -1187,3 +1187,45 @@ body.exam-mode .app-header { padding-top: 14px; padding-bottom: 14px; }
   /* A printed paper cannot be clicked. */
   .card-video { display: none !important; }
 }
+
+/* ==========================================================================
+   Resetting a forgotten password
+   ========================================================================== */
+
+/* The temporary password is said once. It is given the weight of something you
+   are meant to read out loud and then never see again. */
+.reset-result {
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid #e2c98c;
+  border-left: 4px solid #d79a2b;
+  border-radius: 10px;
+  background: #fff9ec;
+}
+.reset-result h3 { margin: 0 0 8px; color: var(--blue); font-size: 1rem; }
+.reset-result .hint { margin: 8px 0 0; }
+.reset-result .button-row { margin-top: 10px; }
+
+.temp-password { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0; }
+.temp-password code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  color: var(--blue);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 14px;
+  user-select: all;
+}
+
+/* Being made to choose your own after a reset. */
+.must-change-panel { border-left: 4px solid var(--accent); }
+
+.lone-admin-note { margin-bottom: 14px; }
+
+@media print {
+  /* A temporary password is not something to leave on paper. */
+  .reset-result { display: none !important; }
+}

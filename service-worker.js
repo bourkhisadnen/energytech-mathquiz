@@ -1,4 +1,4 @@
-const CACHE_NAME = 'energytech-quiz-app-v49-video-on-the-question';
+const CACHE_NAME = 'energytech-quiz-app-v50-password-reset';
 const FILES = [
   './',
   './index.html',

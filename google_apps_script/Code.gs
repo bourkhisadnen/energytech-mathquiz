@@ -132,7 +132,9 @@ function doPost(e) {
     const payload = JSON.parse(e.postData && e.postData.contents ? e.postData.contents : '{}');
     ensureSheets_();
     if (payload.type === 'quiz_session') {
-      const auth = requireAuth_({ token: payload.token });
+      // Named so the must-change gate can refuse it deliberately rather than
+      // because an action happened not to be passed.
+      const auth = requireAuth_({ token: payload.token, action: 'quiz_session' });
       if (!auth.ok) return json_(auth);
       saveSession_(payload.session || {}, auth.instructor);
       return json_({ ok: true, type: 'quiz_session' });
@@ -179,6 +181,10 @@ function doGet(e) {
       data = adminSetStatus_(params);
     } else if (params.action === 'admin_set_role') {
       data = adminSetRole_(params);
+    } else if (params.action === 'admin_reset_instructor_password') {
+      data = adminResetInstructorPassword_(params);
+    } else if (params.action === 'admin_reset_trainee_password') {
+      data = adminResetTraineePassword_(params);
     } else if (params.action === 'roster_list') {
       data = rosterList_(params);
     } else if (params.action === 'trainee_list') {
@@ -267,21 +273,65 @@ function makeToken_() {
   return Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
 }
 
+const INSTRUCTOR_HEADERS = [
+  'Timestamp', 'Username', 'Display Name', 'Password Hash', 'Salt',
+  'Role', 'Status', 'Requested At', 'Approved By', 'Approved At',
+  'Token', 'Token Expires', 'Must Change Password'
+];
+
 function getOrCreateInstructorsSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SHEET_INSTRUCTORS);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_INSTRUCTORS);
-    sheet.appendRow([
-      'Timestamp', 'Username', 'Display Name', 'Password Hash', 'Salt',
-      'Role', 'Status', 'Requested At', 'Approved By', 'Approved At',
-      'Token', 'Token Expires'
-    ]);
+    sheet.appendRow(INSTRUCTOR_HEADERS);
     sheet.setFrozenRows(1);
+  } else if (!ENSURED_[SHEET_INSTRUCTORS]) {
+    // A spreadsheet deployed before this version has no Must Change Password
+    // column. Added here rather than by hand, and without touching a row.
+    ensureHeaders_(sheet, INSTRUCTOR_HEADERS);
+    ENSURED_[SHEET_INSTRUCTORS] = true;
   }
   ensureAdmin_(sheet);
   return sheet;
 }
+
+/* A temporary password an instructor can read down a corridor without it being
+ * misheard: no O or 0, no I, l or 1, and split in two so it can be said in
+ * halves. */
+function makeTempPassword_() {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 8; i++) {
+    if (i === 4) out += '-';
+    out += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+  }
+  return out;
+}
+
+/* What a session whose password was reset may still do. Everything else is
+ * refused until they have chosen their own -- otherwise "must change" is only
+ * a suggestion, and a password read out at a desk stays usable for a month. */
+const ALLOWED_WHILE_MUST_CHANGE = {
+  auth_change_password: true, auth_logout: true,
+  trainee_change_password: true, trainee_logout: true, trainee_me: true,
+  ping: true
+};
+
+function mustChangeBlock_(params, flagged) {
+  if (!flagged) return null;
+  if (ALLOWED_WHILE_MUST_CHANGE[String((params && params.action) || '')]) return null;
+  return {
+    ok: false,
+    mustChangePassword: true,
+    error: 'Your password was reset. Choose a new password before going on.'
+  };
+}
+
+/* Sheets hands a checkbox back as a boolean and a typed cell back as the string
+ * "TRUE", and an upgraded sheet has empty cells for rows written before the
+ * column existed. All three have to read the same way. */
+const isTrue_ = v => v === true || String(v).toUpperCase() === 'TRUE';
 
 function ensureAdmin_(sheet) {
   const values = sheet.getDataRange().getValues();
@@ -363,7 +413,10 @@ function authLogin_(params) {
     token,
     username: String(row[1] || ''),
     displayName: String(row[2] || username),
-    role: String(row[5] || 'instructor')
+    role: String(row[5] || 'instructor'),
+    // Set when an admin reset this account. The app sends them straight to
+    // Change password, and the backend refuses everything else until they have.
+    mustChangePassword: isTrue_(row[12])
   };
 }
 
@@ -392,6 +445,7 @@ function authChangePassword_(params) {
 
   const salt = makeSalt_();
   sheet.getRange(auth.rowNumber, 4, 1, 2).setValues([[hashPassword_(newPassword, salt), salt]]);
+  sheet.getRange(auth.rowNumber, 13).setValue('');    // they have chosen their own now
   return { ok: true, message: 'Password changed.' };
 }
 
@@ -414,6 +468,9 @@ function requireAuth_(params) {
   if (!expires || isNaN(expires.getTime()) || expires.getTime() < Date.now()) {
     return { ok: false, error: 'Session expired. Please log in again.' };
   }
+
+  const blocked = mustChangeBlock_(params, isTrue_(row[12]));
+  if (blocked) return blocked;
 
   return {
     ok: true,
@@ -479,6 +536,83 @@ function adminSetRole_(params) {
 
   sheet.getRange(found.rowNumber, 6).setValue(role);
   return { ok: true, username: target, role };
+}
+
+/* ------------------------- forgotten passwords ----------------------------
+ *
+ * There is no email anywhere in this app, so a reset is something a person does
+ * for another person who is standing in front of them. The admin presses the
+ * button, reads out the temporary password it gives back, and the account is
+ * made to choose its own before it can do anything else.
+ *
+ * The temporary password is returned exactly once, in the reply to the reset.
+ * It is not stored anywhere in readable form and there is no way to ask for it
+ * again -- a reset that could be re-read later would be a password list.
+ *
+ * Both of these also throw away any live session on the account. Someone who
+ * has forgotten their password may well have lost the device it was signed in
+ * on, and the reset is the moment to close that.
+ * -------------------------------------------------------------------------- */
+
+function adminResetInstructorPassword_(params) {
+  const auth = requireAuth_(params);
+  if (!auth.ok) return auth;
+  if (auth.instructor.role !== 'admin') return { ok: false, error: 'Admin access required.' };
+
+  const target = normalizeUsername_(params.targetUsername);
+  if (!target) return { ok: false, error: 'No instructor named.' };
+  // Resetting your own is a roundabout way of changing it, and it would sign
+  // you out mid-action. Change password already does this properly.
+  if (target === normalizeUsername_(auth.instructor.username)) {
+    return { ok: false, error: 'Use Change password to change your own. A reset is for somebody else\'s account.' };
+  }
+
+  const sheet = getOrCreateInstructorsSheet_();
+  const found = findInstructorRow_(sheet, row => normalizeUsername_(row[1]) === target);
+  if (!found) return { ok: false, error: 'Instructor not found.' };
+
+  const temp = makeTempPassword_();
+  const salt = makeSalt_();
+  sheet.getRange(found.rowNumber, 4, 1, 2).setValues([[hashPassword_(temp, salt), salt]]);
+  sheet.getRange(found.rowNumber, 11, 1, 2).setValues([['', '']]);   // sign them out everywhere
+  sheet.getRange(found.rowNumber, 13).setValue(true);
+  SpreadsheetApp.flush();
+
+  return { ok: true, username: target, temporaryPassword: temp,
+           displayName: String(found.row[2] || target) };
+}
+
+function adminResetTraineePassword_(params) {
+  const auth = requireAdmin_(params);
+  if (!auth.ok) return auth;
+
+  const id = normId_(params.energytechId);
+  if (!id) return { ok: false, error: 'No trainee named.' };
+
+  const sheet = traineesSheet_();
+  const found = findTraineeRow_(sheet, id);
+  if (!found) return { ok: false, error: 'Trainee ' + id + ' is not on the roster.' };
+
+  // Only an account that exists can have its password reset. The other two
+  // states have their own remedy, and saying so is more use than a temporary
+  // password for a login that cannot be used.
+  const status = String(found.row[5] || 'none');
+  if (status === 'none') {
+    return { ok: false, error: 'Trainee ' + id + ' has no account yet. They should use "Create my account" and choose their own password.' };
+  }
+  if (status !== 'active') {
+    return { ok: false, error: 'Access for ' + id + ' is turned off. Turn it back on first, then reset the password.' };
+  }
+
+  const temp = makeTempPassword_();
+  const salt = makeSalt_();
+  sheet.getRange(found.rowNumber, 7, 1, 2).setValues([[hashPassword_(temp, salt), salt]]);
+  sheet.getRange(found.rowNumber, 9, 1, 2).setValues([['', '']]);     // sign them out everywhere
+  sheet.getRange(found.rowNumber, 12).setValue(true);
+  SpreadsheetApp.flush();
+
+  return { ok: true, energytechId: id, temporaryPassword: temp,
+           name: String(found.row[2] || '') };
 }
 
 /* ---------------- Sessions / attempts / dashboard ---------------- */
@@ -550,7 +684,7 @@ const GROUP_HEADERS   = ['Timestamp', 'Intake', 'Group', 'Created By'];
 const RETAKE_HEADERS  = ['Timestamp', 'Session Code', 'EnergyTech ID', 'Granted By'];
 const TRAINEE_HEADERS = ['Timestamp', 'EnergyTech ID', 'Name',
                          'Intake', 'Group', 'Account Status', 'Password Hash', 'Salt',
-                         'Token', 'Token Expires', 'Created By'];
+                         'Token', 'Token Expires', 'Created By', 'Must Change Password'];
 
 var ENSURED_ = {};        // reset on every execution, so it cannot go stale
 
@@ -1077,6 +1211,7 @@ function traineeSignup_(params) {
   const expires = new Date(Date.now() + TOKEN_TTL_MS);
   sheet.getRange(found.rowNumber, 6, 1, 5)
        .setValues([['active', hashPassword_(password, salt), salt, token, expires]]);
+  sheet.getRange(found.rowNumber, 12).setValue('');   // a password they chose themselves
   found.row[5] = 'active';                       // report the row as it now is
   return { ok: true, token: token, trainee: traineePublic_(found.row) };
 }
@@ -1100,7 +1235,12 @@ function traineeLogin_(params) {
   const token = makeToken_();
   const expires = new Date(Date.now() + TOKEN_TTL_MS);
   sheet.getRange(found.rowNumber, 9, 1, 2).setValues([[token, expires]]);
-  return { ok: true, token: token, trainee: traineePublic_(found.row) };
+  return {
+    ok: true, token: token, trainee: traineePublic_(found.row),
+    // Set when an admin reset this account: the app sends them straight to
+    // Change password, and the backend refuses the rest until they have.
+    mustChangePassword: isTrue_(found.row[11])
+  };
 }
 
 // Re-reads the roster row on every call, so revoking an account or moving a
@@ -1119,6 +1259,8 @@ function requireTrainee_(params) {
     if (!expires || isNaN(expires.getTime()) || expires.getTime() < Date.now()) {
       return { ok: false, error: 'Session expired. Please log in again.' };
     }
+    const blocked = mustChangeBlock_(params, isTrue_(rows[i][11]));
+    if (blocked) return blocked;
     return { ok: true, rowNumber: i + 2, trainee: traineePublic_(rows[i]) };
   }
   return { ok: false, error: 'Session expired. Please log in again.' };
@@ -1148,6 +1290,7 @@ function traineeChangePassword_(params) {
   }
   const salt = makeSalt_();
   sheet.getRange(auth.rowNumber, 7, 1, 2).setValues([[hashPassword_(newPassword, salt), salt]]);
+  sheet.getRange(auth.rowNumber, 12).setValue('');    // they have chosen their own now
   return { ok: true, message: 'Password changed.' };
 }
 
@@ -1305,7 +1448,7 @@ function saveAttempt_(p) {
     registered: 'walk-in'
   };
   if (p.traineeToken) {
-    const t = requireTrainee_({ token: p.traineeToken });
+    const t = requireTrainee_({ token: p.traineeToken, action: 'quiz_attempt' });
     if (t.ok) {
       identity = {
         name: t.trainee.name,
@@ -1314,6 +1457,14 @@ function saveAttempt_(p) {
         intake: t.trainee.intake,
         registered: 'yes'
       };
+    } else if (t.mustChangePassword) {
+      // Refused rather than allowed to fall through to the walk-in identity
+      // below. A signed-in trainee whose password was just reset would
+      // otherwise have their paper filed under whatever the browser typed --
+      // recorded, and recorded against the wrong person, which is worse than
+      // not recorded at all.
+      return { ok: false, mustChangePassword: true,
+               error: 'Your password was reset. Choose a new password, then sit the paper again.' };
     }
   }
 

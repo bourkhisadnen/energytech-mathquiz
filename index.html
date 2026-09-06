@@ -59,6 +59,29 @@
       </div>
       <div id="teacherLoginStatus" class="feedback empty">Enter your instructor username and password to continue.</div>
 
+      <!-- Shown instead of the instructor interface when an admin has reset
+           this account: the temporary password gets them this far and no
+           further. The backend refuses everything else until it is changed. -->
+      <div id="teacherMustChangePanel" class="signup-panel must-change-panel" hidden>
+        <h3>Choose your own password</h3>
+        <p class="hint">Your password was reset by an admin, so the one you were given is temporary.
+          Choose your own before going on — nobody else knows it.</p>
+        <div class="grid student-grid">
+          <label>
+            New password
+            <input id="teacherForcedNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
+          </label>
+          <label>
+            Repeat it
+            <input id="teacherForcedConfirm" type="password" autocomplete="new-password" placeholder="The same again" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="teacherForcedChangeBtn" type="button">Save my new password</button>
+        </div>
+        <div id="teacherForcedStatus" class="feedback empty" hidden></div>
+      </div>
+
       <div id="teacherSignupPanel" class="signup-panel" hidden>
         <h3>Request an instructor account</h3>
         <p class="hint">An admin has to approve your request before you can log in.</p>
@@ -297,6 +320,8 @@
           <button id="loadRosterBtn" class="secondary" type="button">Refresh</button>
         </div>
         <div id="rosterStatusLine" class="feedback empty" hidden></div>
+        <!-- The temporary password from a trainee reset, shown once. -->
+        <div id="traineeResetResult" class="reset-result" hidden></div>
 
         <!-- One trainee's record. Replaces the three panes so it has the full
              width for a question-by-question review. -->
@@ -393,6 +418,9 @@
         <div class="button-row">
           <button id="loadInstructorAccountsBtn" class="secondary">Load instructor accounts</button>
         </div>
+        <!-- A reset hands back one temporary password, once. It is shown here
+             and nowhere else, and there is no way to ask for it again. -->
+        <div id="resetResult" class="reset-result" hidden></div>
         <div id="instructorAccountsOutput" class="dashboard-output"></div>
       </section>
     </section>
@@ -418,6 +446,28 @@
           <button id="backFromTraineeBtn" class="secondary">Back</button>
         </div>
         <div id="traineeLoginStatus" class="feedback empty">Log in with your EnergyTech ID to start a quiz.</div>
+
+        <!-- Shown instead of the home screen when an admin has reset this
+             account. The temporary password gets them this far and no further. -->
+        <div id="traineeMustChangePanel" class="signup-panel must-change-panel" hidden>
+          <h3>Choose your own password</h3>
+          <p class="hint">Your password was reset by your instructor, so the one you were given is
+            temporary. Choose your own before starting a quiz — your instructor cannot see it.</p>
+          <div class="grid student-grid">
+            <label>
+              New password
+              <input id="traineeForcedNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
+            </label>
+            <label>
+              Repeat it
+              <input id="traineeForcedConfirm" type="password" autocomplete="new-password" placeholder="The same again" />
+            </label>
+          </div>
+          <div class="button-row">
+            <button id="traineeForcedChangeBtn" type="button">Save my new password</button>
+          </div>
+          <div id="traineeForcedStatus" class="feedback empty" hidden></div>
+        </div>
 
         <div id="traineeSignupPanel" class="signup-panel" hidden>
           <h3>Create my account</h3>

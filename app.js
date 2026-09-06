@@ -2017,6 +2017,18 @@ async function attemptInstructorLogin() {
       }
       return;
     }
+    // An admin reset this account: the temporary password gets them to the
+    // "choose your own" form and no further. Nothing is persisted and the
+    // interface stays shut until they have chosen.
+    if (data.mustChangePassword) {
+      if ($('teacherLoginPassword')) $('teacherLoginPassword').value = '';
+      if (statusEl) {
+        statusEl.className = 'feedback warn';
+        statusEl.innerHTML = 'Your password was reset. Choose your own to continue.';
+      }
+      beginForcedChange('instructor', data.token, password, data);
+      return;
+    }
     authToken = data.token;
     authUser = { username: data.username, displayName: data.displayName, role: data.role };
     persistAuth();
@@ -2158,10 +2170,23 @@ function renderInstructorAccounts(list) {
         ${i.status !== 'rejected' && i.username !== me ? `<button type="button" class="secondary account-reject-btn" data-username="${escapeHtml(i.username)}">${i.status === 'pending' ? 'Reject' : 'Revoke'}</button>` : ''}
         ${i.role !== 'admin' && i.status === 'approved' ? `<button type="button" class="secondary account-promote-btn" data-username="${escapeHtml(i.username)}">Make admin</button>` : ''}
         ${i.role === 'admin' && i.username !== me ? `<button type="button" class="secondary account-demote-btn" data-username="${escapeHtml(i.username)}">Remove admin</button>` : ''}
+        ${i.status === 'approved' && i.username !== me ? `<button type="button" class="secondary account-reset-btn" data-username="${escapeHtml(i.username)}" data-name="${escapeHtml(i.displayName || i.username)}">Reset password</button>` : ''}
       </td>
     </tr>`;
 
+  // Nothing in the app can rescue a lone admin who forgets their own password:
+  // a reset is always somebody else doing it for you. Said here, where the
+  // second admin would be made, rather than discovered on the day.
+  const admins = list.filter(i => i.role === 'admin' && i.status === 'approved');
+  const loneAdmin = admins.length <= 1 ? `
+    <div class="feedback warn lone-admin-note">
+      <strong>You are the only admin.</strong> A forgotten password is reset by another admin —
+      so if you forget yours, nobody can. Make a colleague an admin as well and the two of you
+      can reset each other.
+    </div>` : '';
+
   out.innerHTML = `
+    ${loneAdmin}
     <h3>Pending requests${pending.length ? ` (${pending.length})` : ''}</h3>
     ${tableHtml(['Name','Username','Status','Role','Actions'], pending.map(row), 'No pending requests.')}
     <h3>All instructor accounts</h3>
@@ -2176,6 +2201,152 @@ async function setInstructorStatus(username, status) {
     if (!data || !data.ok) { alert((data && data.error) || 'Could not update account.'); return; }
     loadInstructorAccounts();
   } catch (err) { alert(err.message || String(err)); }
+}
+
+/* ==========================================================================
+ * Forgotten passwords
+ *
+ * No email anywhere in this app, so a reset is a thing one person does for
+ * another who is standing in front of them: press the button, read out the
+ * temporary password, and the account is made to choose its own before it can
+ * do anything else.
+ *
+ * The temporary password comes back exactly once, in the reply to the reset.
+ * It is shown here and nowhere else, and there is no way to ask for it again --
+ * anything that could re-read it would be a list of passwords.
+ * ========================================================================== */
+
+function showTempPassword(elId, who, temp) {
+  const el = $(elId);
+  if (!el) return;
+  el.hidden = false;
+  el.innerHTML = `
+    <h3>Temporary password for ${escapeHtml(who)}</h3>
+    <p class="temp-password"><code>${escapeHtml(temp)}</code>
+      <button type="button" class="secondary copy-temp" data-pw="${escapeHtml(temp)}">Copy</button></p>
+    <p class="hint"><strong>Read it to them now.</strong> It is shown once and cannot be looked up
+      again — if it is lost, reset the password again. They will have to choose their own the
+      moment they log in, and any session they had open has been signed out.</p>
+    <div class="button-row"><button type="button" class="secondary dismiss-temp">Done</button></div>`;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function hideTempPassword(elId) {
+  const el = $(elId);
+  if (el) { el.hidden = true; el.innerHTML = ''; }
+}
+
+async function resetInstructorPassword(username, displayName) {
+  if (!confirm(`Reset the password for ${displayName || username}?\n\n`
+    + 'Their current password stops working immediately and they are signed out everywhere.')) return;
+  try {
+    const data = await rosterCall('admin_reset_instructor_password',
+      { token: authToken, targetUsername: username }, 'energytechResetInstructor');
+    if (!data.ok) { alert(data.error || 'Could not reset that password.'); return; }
+    showTempPassword('resetResult', data.displayName || username, data.temporaryPassword);
+    loadInstructorAccounts();
+  } catch (err) { alert(err.message || String(err)); }
+}
+
+async function resetTraineePassword(energytechId, name) {
+  if (!confirm(`Reset the password for ${name || energytechId}?\n\n`
+    + 'Their current password stops working immediately and they are signed out everywhere.')) return;
+  try {
+    const data = await rosterCall('admin_reset_trainee_password',
+      { token: authToken, energytechId }, 'energytechResetTrainee');
+    if (!data.ok) { rosterStatus(data.error || 'Could not reset that password.', 'bad'); return; }
+    showTempPassword('traineeResetResult', `${data.name || ''} (${energytechId})`.trim(), data.temporaryPassword);
+  } catch (err) { rosterStatus(err.message || String(err), 'bad'); }
+}
+
+/* Copying is worth having: these are deliberately awkward strings to retype,
+ * and the alternative is the admin squinting at the screen. */
+async function copyTempPassword(btn) {
+  const pw = btn.dataset.pw || '';
+  try {
+    await navigator.clipboard.writeText(pw);
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  } catch {
+    btn.textContent = 'Press Ctrl+C';
+  }
+}
+
+/* --- being made to choose your own after a reset ---
+ *
+ * The temporary password gets them as far as this form and no further: the
+ * login is not kept and the interface is not opened until they have chosen.
+ * The backend refuses everything else regardless, so this is the app agreeing
+ * with it rather than the app enforcing it. */
+let forcedChange = null;      // { role, token, oldPassword, login } while pending
+
+function beginForcedChange(role, token, oldPassword, login) {
+  forcedChange = { role, token, oldPassword, login };
+  const panel = role === 'instructor' ? 'teacherMustChangePanel' : 'traineeMustChangePanel';
+  if ($(panel)) $(panel).hidden = false;
+  const first = role === 'instructor' ? 'teacherForcedNewPassword' : 'traineeForcedNewPassword';
+  if ($(first)) $(first).focus();
+}
+
+function endForcedChange() {
+  forcedChange = null;
+  ['teacherMustChangePanel', 'traineeMustChangePanel'].forEach(id => { if ($(id)) $(id).hidden = true; });
+  ['teacherForcedNewPassword', 'teacherForcedConfirm',
+   'traineeForcedNewPassword', 'traineeForcedConfirm'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['teacherForcedStatus', 'traineeForcedStatus'].forEach(id => {
+    if ($(id)) { $(id).hidden = true; $(id).innerHTML = ''; }
+  });
+}
+
+async function submitForcedChange(role) {
+  const isInstructor = role === 'instructor';
+  const st = $(isInstructor ? 'teacherForcedStatus' : 'traineeForcedStatus');
+  const say = (kind, msg) => {
+    if (!st) return;
+    st.hidden = false;
+    st.className = `feedback ${kind}`;
+    st.innerHTML = msg;
+  };
+  if (!forcedChange || forcedChange.role !== role) {
+    say('bad', 'That reset is no longer pending. Log in again.');
+    return;
+  }
+  const pw = $(isInstructor ? 'teacherForcedNewPassword' : 'traineeForcedNewPassword').value;
+  const again = $(isInstructor ? 'teacherForcedConfirm' : 'traineeForcedConfirm').value;
+  if (pw.length < 6) { say('warn', 'Choose at least 6 characters.'); return; }
+  if (pw !== again) { say('warn', 'The two passwords do not match.'); return; }
+  // A trainee handed the same slip twice would otherwise keep the password that
+  // was read out loud, which is the one thing this whole flow exists to stop.
+  if (pw === forcedChange.oldPassword) {
+    say('warn', 'Choose something other than the temporary password you were given.');
+    return;
+  }
+
+  say('empty', 'Saving&hellip;');
+  try {
+    const data = await rosterCall(isInstructor ? 'auth_change_password' : 'trainee_change_password',
+      { token: forcedChange.token, oldPassword: forcedChange.oldPassword, newPassword: pw },
+      'energytechForcedPw');
+    if (!data.ok) { say('bad', escapeHtml(data.error || 'Could not save it.')); return; }
+
+    const pending = forcedChange;
+    endForcedChange();
+    if (isInstructor) {
+      authToken = pending.token;
+      authUser = { username: pending.login.username, displayName: pending.login.displayName, role: pending.login.role };
+      persistAuth();
+      const s = $('teacherLoginStatus');
+      if (s) { s.className = 'feedback good'; s.innerHTML = 'Password changed. Signed in.'; }
+      enterInstructorInterface();
+    } else {
+      traineeToken = pending.token;
+      traineeProfile = pending.login.trainee;
+      persistTrainee();
+      const s = $('traineeLoginStatus');
+      if (s) { s.className = 'feedback good'; s.innerHTML = 'Password changed. Signed in.'; }
+      renderTraineeHome();
+    }
+  } catch (err) { say('bad', escapeHtml(err.message || String(err))); }
 }
 
 async function setInstructorRole(username, role) {
@@ -2725,7 +2896,19 @@ function init() {
     if (promoteBtn) { setInstructorRole(promoteBtn.dataset.username, 'admin'); return; }
     const demoteBtn = e.target.closest && e.target.closest('.account-demote-btn');
     if (demoteBtn) { setInstructorRole(demoteBtn.dataset.username, 'instructor'); return; }
+    const resetBtn = e.target.closest && e.target.closest('.account-reset-btn');
+    if (resetBtn) { resetInstructorPassword(resetBtn.dataset.username, resetBtn.dataset.name); return; }
+    const copyTemp = e.target.closest && e.target.closest('.copy-temp');
+    if (copyTemp) { copyTempPassword(copyTemp); return; }
+    const dismissTemp = e.target.closest && e.target.closest('.dismiss-temp');
+    if (dismissTemp) {
+      const panel = dismissTemp.closest('.reset-result');
+      if (panel) { panel.hidden = true; panel.innerHTML = ''; }
+      return;
+    }
   });
+  if ($('teacherForcedChangeBtn')) $('teacherForcedChangeBtn').addEventListener('click', () => submitForcedChange('instructor'));
+  if ($('traineeForcedChangeBtn')) $('traineeForcedChangeBtn').addEventListener('click', () => submitForcedChange('trainee'));
   if ($('previewSessionBtn')) $('previewSessionBtn').addEventListener('click', generateQuiz);
   if ($('newSeedBtn')) $('newSeedBtn').addEventListener('click', () => { $('seedInput').value = String(Math.floor(Math.random() * 90000000) + 10000000); });
   if ($('submitBtn')) $('submitBtn').addEventListener('click', () => calculateScore({ target: 'teacher', requireAll: false, reveal: true }));
@@ -2855,11 +3038,17 @@ async function rosterCall(action, params = {}, prefix = 'energytechRoster', retr
     }
   }
   if (!data) throw new Error('No response from the backend.');
-  // An Apps Script that predates this module has no such action and falls
-  // through to its generic reply, so ok:true arrives with nothing in it.
-  if (data.ok && data.message && !data.intakes && !data.trainees && !data.trainee
-      && data.added === undefined && !data.label && !data.name && !data.deleted
-      && !data.energytechId && !data.token && !data.status) {
+  // An Apps Script that predates this module has no branch for the action and
+  // falls through to its generic reply -- ok:true, and that one fixed sentence.
+  //
+  // This used to be spelled as "ok:true with a message and none of the fields
+  // we know about", which caught the fallback and also caught every honest
+  // reply whose whole content IS a message. "Password changed." is one: a
+  // trainee pressing Change my password was told their Apps Script needed
+  // upgrading, and their password had in fact just been changed. Matching the
+  // sentence the old deployment actually sends is both narrower and more
+  // accurate than guessing from the shape.
+  if (data.ok && /backend is running/i.test(String(data.message || ''))) {
     throw new Error('This Google Apps Script does not have the intake module yet. '
       + 'Paste the latest Code.gs into Apps Script, then Deploy → Manage deployments → '
       + 'edit → Version: New version → Deploy.');
@@ -2964,6 +3153,17 @@ async function traineeLogIn() {
     const data = await rosterCall('trainee_login', { energytechId: id, password }, 'energytechTraineeLogin');
     if (!data.ok || !data.token || !data.trainee) {
       if (st) { st.className = 'feedback bad'; st.innerHTML = escapeHtml(data.error || 'Login failed.'); }
+      return;
+    }
+    // Reset by an instructor: the temporary password gets them to the "choose
+    // your own" form and no further.
+    if (data.mustChangePassword) {
+      if ($('traineeLoginPassword')) $('traineeLoginPassword').value = '';
+      if (st) {
+        st.className = 'feedback warn';
+        st.innerHTML = 'Your password was reset. Choose your own to continue.';
+      }
+      beginForcedChange('trainee', data.token, password, data);
       return;
     }
     traineeToken = data.token;
@@ -3248,6 +3448,9 @@ function traineeRow(t, opts) {
     <td>${accountBadge(t.accountStatus || 'none')}</td>
     <td class="row-actions">
       <button type="button" class="icon-btn trainee-edit" data-id="${id}">Edit</button>
+      ${t.accountStatus === 'active'
+        ? `<button type="button" class="icon-btn trainee-reset-pw" data-id="${id}" data-name="${escapeHtml(t.name || '')}">Reset password</button>`
+        : ''}
       <button type="button" class="icon-btn danger trainee-delete" data-id="${id}">Delete</button>
     </td>
   </tr>`;
@@ -4636,6 +4839,8 @@ function wireRosterUi() {
 
       const tEdit = t.closest('.trainee-edit');
       if (tEdit) { editingId = tEdit.dataset.id; renderTraineePane(); return; }
+      const tReset = t.closest('.trainee-reset-pw');
+      if (tReset) { resetTraineePassword(tReset.dataset.id, tReset.dataset.name); return; }
       if (t.closest('.cancel-edit')) { editingId = ''; renderTraineePane(); return; }
       const tSave = t.closest('.save-trainee');
       if (tSave) {
