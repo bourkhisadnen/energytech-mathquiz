@@ -44,7 +44,9 @@ function ok(cond, label) {
   const papers = await page.evaluate(() => allPapers().map(p => ({
     key: p.key, chapter: p.chapterKey, label: p.setLabel, n: p.questions.length
   })));
-  ok(papers.length === 8, `eight papers on record (${papers.length})`);
+  ok(papers.length === 12, `twelve papers on record (${papers.length})`);
+  ok(new Set(papers.map(p => p.chapter)).size === 3,
+    `across three chapters (${[...new Set(papers.map(p => p.chapter))].join(', ')})`);
 
   for (const paper of papers) {
     console.log(`\n=== ${paper.chapter} / ${paper.label} (${paper.n} questions) ===`);
@@ -77,14 +79,22 @@ function ok(cond, label) {
     ok(rendered === paper.n, `${paper.n} cards rendered`);
 
     // Diagrams belong to one chapter only: nothing from another chapter's
-    // image set may appear on this paper.
+    // picture set may appear on this paper. Naming each chapter's own pictures
+    // and rejecting everything else beats naming one rival, which quietly stops
+    // checking the moment a third chapter arrives.
     const foreign = await page.evaluate(ch => {
-      const wrong = ch === 'ch03' ? 'original_' : 'ch03_';
+      const OWNED = {
+        ch12: [/(^|\/)images\/original_/],
+        ch03: [/(^|\/)images\/ch03_/],
+        ch12a: [/(^|\/)figures_ch12a\//, /(^|\/)images\/ch12a_/]
+      };
+      const mine = OWNED[ch] || [];
       return [...document.querySelectorAll('#quizContainer img')]
         .map(i => i.getAttribute('src') || '')
-        .filter(s => s.includes(wrong)).length;
+        .filter(s => !mine.some(re => re.test(s)));
     }, paper.chapter);
-    ok(foreign === 0, 'no diagram from another chapter');
+    ok(foreign.length === 0,
+      `every picture belongs to this chapter${foreign.length ? ' (saw ' + foreign[0] + ')' : ''}`);
 
     // Same for the explanation videos.
     const badVideo = await page.evaluate(ch => {

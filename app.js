@@ -19,9 +19,13 @@ const $ = (id) => document.getElementById(id);
  * Keys saved before Chapter 03 existed have no prefix ("version_b"); those still
  * resolve to Chapters 01 & 02, so old session codes keep working.
  */
+// 'ch12' has meant Chapters 01 & 02 since before any other chapter existed, and
+// session codes already written into the Sheet carry it, so it cannot be handed
+// to the chapter actually named 12A. That one is 'ch12a'.
 const CHAPTERS = {
   ch12: { label: 'Chapters 01 & 02', sets: () => window.QUESTION_BANK_SETS || {} },
-  ch03: { label: 'Chapter 03', sets: () => window.QUESTION_BANK_SETS_CH03 || {} }
+  ch03: { label: 'Chapter 03', sets: () => window.QUESTION_BANK_SETS_CH03 || {} },
+  ch12a: { label: 'Chapter 12A', sets: () => window.QUESTION_BANK_SETS_CH12A || {} }
 };
 const DEFAULT_CHAPTER = 'ch12';
 const DEFAULT_SET = 'original_pdf';
@@ -633,6 +637,23 @@ function convertSuperscripts(str) {
   return str;
 }
 
+function replaceSqrt(s) {
+  let out = '';
+  for (let i = 0; i < s.length;) {
+    if (!s.startsWith('\\sqrt{', i)) { out += s[i++]; continue; }
+    let j = i + 6, depth = 1;
+    while (j < s.length && depth) {
+      if (s[j] === '{') depth++;
+      else if (s[j] === '}') depth--;
+      if (depth) j++;
+    }
+    if (depth) { out += s[i++]; continue; }        // unbalanced; leave it alone
+    out += `<span class="sqrt">&radic;<span class="radicand">${s.slice(i + 6, j)}</span></span>`;
+    i = j + 1;
+  }
+  return out;
+}
+
 function renderMath(raw) {
   if (raw == null) return '';
   let s = String(raw);
@@ -644,6 +665,14 @@ function renderMath(raw) {
   s = s.replace(/\\[()\[\]]/g, '');
   s = s.replace(/\\hspace\{[^{}]*\}/g, '____');
   s = s.replace(/\\underline\{([^{}]*)\}/g, '$1');
+  // Chapter 12A names segments the way a geometry sheet does. The bar is what
+  // distinguishes the segment DE from the product D times E, so it is drawn
+  // rather than dropped.
+  s = s.replace(/\\overline\{([^{}]*)\}/g, '<span class="overline">$1</span>');
+  // A root sign with a bar over everything under it. The radicand can hold
+  // nested braces -- s(s-a)(s-b)(s-c) does not, but \frac does -- so the
+  // matching brace is found by counting rather than by a pattern.
+  s = replaceSqrt(s);
   s = s.replace(/\\%/g, '%');
   s = s.replace(/\\,/g, ' ');
   s = s.replace(/\\ /g, ' ');
