@@ -71,6 +71,21 @@ function splitOptionList(raw) {
  * Ten questions carry their tikzpicture in the body and need nothing: the
  * placeholder is absent and the picture is already there. The rest are one of
  * three kinds. */
+/* The file the WORKSHEET needs for a picture, which is not always the file the
+ * page shows.
+ *
+ * Chapter 12A's figures are SVG: right for a browser, and something pdflatex
+ * cannot read at all -- it stops with "Unknown graphics extension: .svg" and
+ * the worksheet comes out with no drawings. A PDF of the same figure is built
+ * from the same compile and sits beside it, so the swap is by extension.
+ *
+ * Both the \includegraphics line and the list of files to bundle go through
+ * here, because naming the picture in two places is how one of them ends up
+ * asking for a file the other did not pack. */
+function worksheetImageSrc(src) {
+  return String(src || '').replace(/\.svg$/i, '.pdf');
+}
+
 function diagramTexFor(q) {
   const d = q && q.diagram;
   if (!d) return '';
@@ -83,7 +98,7 @@ function diagramTexFor(q) {
   }
   if (d.type === 'image') {
     // Bundled beside the .tex, so the path is the file name and nothing else.
-    const file = String(d.src).replace(/^.*\//, '');
+    const file = worksheetImageSrc(d.src).replace(/^.*\//, '');
     return `\\par\\vspace{2pt}\\centerline{\\includegraphics[max width=\\linewidth,max height=95pt]{${file}}}\\vspace{1pt}`;
   }
   return '';
@@ -96,7 +111,8 @@ function imagesUsedBy(questions) {
   const out = [];
   (questions || []).forEach(q => {
     if (q && q.diagram && q.diagram.type === 'image' && q.diagram.src) {
-      if (out.indexOf(q.diagram.src) === -1) out.push(q.diagram.src);
+      const src = worksheetImageSrc(q.diagram.src);
+      if (out.indexOf(src) === -1) out.push(src);
     }
   });
   return out;
@@ -274,6 +290,12 @@ const WORKSHEET_PREAMBLE = String.raw`\documentclass[10pt,a4paper]{article}
 % and they are the difference between compiling and not on somebody else's
 % machine. Only the two load-bearing ones are covered by a mutation, because
 % only those two can be shown to fail here.
+% U+2220 and U+2225 arrive with Chapter 12A, whose bank stores the angle sign
+% and the parallel sign as characters rather than as \\ang and \\parallel. The
+% kernel knows neither, and without these two lines every geometry question
+% stops the compile.
+\DeclareUnicodeCharacter{2220}{\ensuremath{\angle}}
+\DeclareUnicodeCharacter{2225}{\ensuremath{\parallel}}
 \DeclareUnicodeCharacter{2026}{\dots}
 \DeclareUnicodeCharacter{00B2}{\ensuremath{^{2}}}
 \DeclareUnicodeCharacter{00B3}{\ensuremath{^{3}}}
@@ -866,7 +888,7 @@ function buildZip(files) {
 
 const WorksheetExport = {
   buildWorksheetTex, texEscape, texBody, splitOptionList,
-  diagramTexFor, imagesUsedBy, masteryRows, collapseRuns, crc32, buildZip
+  diagramTexFor, imagesUsedBy, worksheetImageSrc, masteryRows, collapseRuns, crc32, buildZip
 };
 
 root.WorksheetExport = WorksheetExport;

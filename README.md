@@ -766,12 +766,25 @@ Nearly every question is set over a figure, and most of them keep their
 dimensions in the picture rather than in the sentence — "The area of the next
 trapezoid is", with the 10.0 m and 16.0 m written on the drawing.
 
-The figures are the worksheet's own TikZ, compiled with pdfLaTeX and converted
-to SVG, so what a trainee sees on screen is the same drawing that prints on the
-paper rather than a redrawing of it. There are **162 distinct drawings** across
-the four versions, in `figures_ch12a/`, named by a hash of their source so that
-the same drawing used by two versions is stored once. The palm-tree photograph
-on Q76 is a real image, one per version, in `images/`.
+The figures are the worksheet's own TikZ, compiled with pdfLaTeX, so what a
+trainee sees on screen is the same drawing that prints on the paper rather than
+a redrawing of it. There are **162 distinct drawings** across the four versions,
+in `figures_ch12a/`, named by a hash of their source so that the same drawing
+used by two versions is stored once. The palm-tree photograph on Q76 is a real
+image, one per version, in `images/`.
+
+Each drawing is stored **twice**, as `<hash>.svg` and `<hash>.pdf`, from the same
+compile:
+
+- the **SVG** is what the page shows — it is what a browser wants, and it is the
+  version the service worker caches for offline use;
+- the **PDF** is what the worksheet export sends to Overleaf, because pdfLaTeX
+  cannot read SVG at all. It stops with *"Unknown graphics extension: .svg"* and
+  produces a worksheet with no drawings in it.
+
+The PDFs are not precached: 3.5 MB on every trainee's device for a button only
+an instructor presses, and only while online. They are fetched when the export
+runs.
 
 ### Version A's answer key
 
@@ -788,6 +801,20 @@ asks the identical question over the identical drawing.
 
 **If you have Version A's original key, it is worth comparing.** The derivation
 is careful and checked, but it is a derivation.
+
+### Exporting a Chapter 12A worksheet
+
+Two things about this chapter have to be right or the export comes back broken,
+and both are held down by mutations in `mutate_backend.js`:
+
+1. **The pictures go as PDF, not SVG** (above). `worksheetImageSrc` in
+   `worksheet_tex.js` does the swap, and both the `\includegraphics` line and
+   the list of files to bundle go through it — naming the picture in two places
+   is how one ends up asking for a file the other did not pack.
+2. **The angle and parallel signs are declared.** The bank stores ∠ and ∥ as
+   characters rather than as `\ang` and `\parallel`, and the LaTeX kernel knows
+   neither. Without `\DeclareUnicodeCharacter{2220}` and `{2225}` in the
+   preamble, every geometry question stops the compile.
 
 ### A trap to remember when comparing versions
 

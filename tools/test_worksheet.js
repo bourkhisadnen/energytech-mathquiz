@@ -15,6 +15,7 @@ const APP = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed';
 global.window = {};
 require(APP + '/question_bank.js');
 require(APP + '/question_bank_ch03.js');
+require(APP + '/question_bank_ch12a.js');
 const W = require(APP + '/worksheet_tex.js');
 
 let failures = [], checks = 0;
@@ -26,6 +27,8 @@ for (const [k, v] of Object.entries(window.QUESTION_BANK_SETS || {}))
   v.questions.forEach(q => BANK.push(Object.assign({ __set: 'ch12:' + k }, q)));
 for (const [k, v] of Object.entries(window.QUESTION_BANK_SETS_CH03 || {}))
   v.questions.forEach(q => BANK.push(Object.assign({ __set: 'ch03:' + k }, q)));
+for (const [k, v] of Object.entries(window.QUESTION_BANK_SETS_CH12A || {}))
+  v.questions.forEach(q => BANK.push(Object.assign({ __set: 'ch12a:' + k }, q)));
 
 const SESSION = { sessionCode: 'G1-9001', sessionName: 'Midterm exam', intake: 'JAN26',
                   group: 'G1', mode: 'assessment', questionSet: 'Chapters 01 & 02' };
@@ -303,6 +306,64 @@ print(blobs.get('ETW02lib', ''))
   ['Name', 'Group', 'EnergyTechID'].forEach(f =>
     ok(!new RegExp(`push\\("${f}"\\)`).test(reset), `${f} is not in the list Clear all empties`));
   ok(/push\("Q" \+ i\)/.test(reset), 'while every question answer is');
+}
+
+console.log('\n=== 12. Chapter 12A: SVG on screen, PDF in the worksheet ===');
+// Both bugs in this section came back from the instructor, not from a test.
+//
+// The chapter's figures are SVG, which is right for a browser and unreadable to
+// pdflatex -- it stops with "Unknown graphics extension: .svg" and the PDF comes
+// out with no drawings at all. And the bank stores the angle and parallel signs
+// as characters, which the LaTeX kernel does not know either. Both only show up
+// when the worksheet is actually built, which is why they reached him.
+{
+  const ch12a = BANK.filter(q => q.__set.startsWith('ch12a:'));
+  ok(ch12a.length === 328, `the chapter is in this test's bank (${ch12a.length} questions)`);
+
+  const withPictures = ch12a.filter(q => q.diagram && q.diagram.type === 'image');
+  ok(withPictures.length > 0, `${withPictures.length} of them carry a picture`);
+
+  // Nothing handed to pdflatex may be an SVG, and the file named in the
+  // \includegraphics line must be one of the files that get bundled.
+  const wanted = W.imagesUsedBy(withPictures);
+  eq(wanted.filter(s => /\.svg$/i.test(s)), [], 'no SVG is offered to pdflatex');
+  ok(wanted.every(s => /\.(pdf|png|jpe?g)$/i.test(s)),
+    'every bundled picture is a format pdflatex can read');
+  const named = withPictures.map(q => {
+    const m = W.diagramTexFor(q).match(/\{([^{}]+\.(?:pdf|png|jpe?g))\}/i);
+    return m ? m[1] : null;
+  });
+  eq(named.filter(n => !n), [], 'and every picture question names a file it can read');
+  const packed = new Set(wanted.map(s => s.replace(/^.*\//, '')));
+  eq([...new Set(named)].filter(n => !packed.has(n)), [],
+    'each file named in the document is one of the files packed beside it');
+
+  // The twin has to exist. imagesUsedBy asking for a .pdf that was never built
+  // would fail at export time in the instructor's browser, not here.
+  const absent = wanted.filter(s => !fs.existsSync(path.join(APP, s)));
+  eq(absent, [], 'every picture the worksheet asks for exists on disk');
+  const svgAbsent = withPictures
+    .map(q => q.diagram.src)
+    .filter(s => !fs.existsSync(path.join(APP, s)));
+  eq(svgAbsent, [], 'and so does the file the SCREEN uses, which is a different one');
+
+  // Then compile a whole paper, which is the check that would have caught both.
+  const paper = BANK.filter(q => q.__set === 'ch12a:version_a');
+  const built = compile('ch12a', paper, Object.assign({}, SESSION, {
+    sessionName: 'Chapter 12A', questionSet: 'Chapter 12A — Version A' }));
+  ok(built.compiled, 'a whole Chapter 12A paper compiles');
+  eq(built.errors, [], `with no errors${built.firstError ? ' (' + built.firstError + ')' : ''}`);
+
+  const log = fs.readFileSync(path.join(built.dir, 'worksheet.log'), 'utf8');
+  ok(!/Unknown graphics extension/.test(log), 'and pdflatex recognised every picture');
+  ok(!/Unicode character/.test(log),
+    'and knew every character in it, the angle and parallel signs included');
+  // A drawing that silently failed to load still lets the compile finish, so
+  // count what actually went in.
+  const drawn = (log.match(/<use ([^>]*\.pdf)/g) || []).length
+    || (log.match(/\.pdf>/g) || []).length;
+  ok(drawn >= built.out.images.length,
+    `all ${built.out.images.length} drawings were read into the document (${drawn})`);
 }
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'energytech-quiz-app-v51-chapter-12a';
+const CACHE_NAME = 'energytech-quiz-app-v52-ch12a-worksheet';
 const FILES = [
   './',
   './index.html',
@@ -33,6 +33,10 @@ const FILES = [
   './images/ch03_q38_capsule.jpg',
   './images/ch03_q67_screwdriver.jpg',
   './images/ch03_q68_screw.jpg'
+  // Chapter 12A's drawings. The SVGs are listed because every trainee sees
+  // them; the PDF twin of each, which only the worksheet export uses, is
+  // deliberately NOT listed -- 3.5 MB downloaded onto every device for a
+  // button only an instructor presses, and only while online.
   './figures_ch12a/0132f9050e1a.svg',
   './figures_ch12a/01b106c206d1.svg',
   './figures_ch12a/037bf67d1a81.svg',

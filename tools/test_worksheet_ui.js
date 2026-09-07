@@ -288,6 +288,56 @@ print('etFeedback' in blobs.get('ETW02lib',''))
   ok(/Ch03 exam/.test(Buffer.from(uri.replace(/^data:application\/zip;base64,/, ''), 'base64').toString('latin1')),
     'and the exam name is in the worksheet');
 
+  console.log('\n=== 9b. Chapter 12A travels as PDF drawings, not the SVG on screen ===');
+  // The page shows SVG; pdflatex cannot read it. What the browser actually
+  // fetches and packs is what decides whether the instructor gets drawings, and
+  // that is only visible from here -- the exporter can name the right file and
+  // the fetch still bring back the wrong one.
+  await p.evaluate(() => {
+    document.querySelectorAll('#questionTree input[type=checkbox]').forEach(b => { if (b.checked) b.click(); });
+  });
+  await p.waitForTimeout(300);
+  await makeSession(p, { label: 'Version A', count: 9999, mode: 'practice', name: 'Ch12A practice' });
+  const geoCount = await p.evaluate(() => WorksheetExport.imagesUsedBy(currentQuiz).length);
+  ok(geoCount > 40, `the geometry paper carries ${geoCount} drawings`);
+  overleafPosts = [];
+  await p.waitForTimeout(2500);         // let the drawings prefetch
+  await p.click('#overleafExportBtn');
+  await p.waitForTimeout(2500);
+  eq(overleafPosts.length, 1, 'one POST for the geometry paper');
+  const uri3 = new URLSearchParams(overleafPosts[0].body).get('snip_uri') || '';
+  ok(/^data:application\/zip;base64,/.test(uri3), 'sent as a zip, because it carries drawings');
+
+  const zip3 = path.join(tmp, 'ch12a.zip');
+  fs.writeFileSync(zip3, Buffer.from(uri3.replace(/^data:application\/zip;base64,/, ''), 'base64'));
+  const list3 = execFileSync('unzip', ['-Z1', zip3], { encoding: 'utf8' }).trim().split('\n');
+  eq(list3.filter(n => /\.svg$/i.test(n)), [], 'not one SVG is in the bundle');
+  // Asking for "every file as PDF" would be wrong: Q76 is a photograph, and
+  // stays a PNG. The claim worth making is that every file the exporter asked
+  // for is one the bundle actually carries.
+  const asked = await p.evaluate(() =>
+    WorksheetExport.imagesUsedBy(currentQuiz).map(s => s.replace(/^.*\//, '')));
+  eq(asked.filter(n => !list3.includes(n)), [],
+    `all ${geoCount} pictures the paper asks for are in the bundle`);
+  ok(list3.filter(n => /\.pdf$/i.test(n)).length >= geoCount - 1,
+    `and all but the one photograph are vector PDFs (${list3.filter(n => /\.pdf$/i.test(n)).length})`);
+
+  const dir3 = path.join(tmp, 'ch12abuild');
+  fs.mkdirSync(dir3, { recursive: true });
+  execFileSync('unzip', ['-o', zip3, '-d', dir3], { stdio: 'pipe' });
+  let built3 = false;
+  try {
+    for (let pass = 0; pass < 2; pass++)
+      execFileSync('pdflatex', ['-interaction=nonstopmode', 'worksheet.tex'], { cwd: dir3, stdio: 'pipe' });
+    built3 = fs.existsSync(path.join(dir3, 'worksheet.pdf'));
+  } catch { /* the log is the verdict */ }
+  const log3 = fs.existsSync(path.join(dir3, 'worksheet.log'))
+    ? fs.readFileSync(path.join(dir3, 'worksheet.log'), 'utf8') : '';
+  ok(built3, 'the bundle the browser posted compiles');
+  eq(log3.match(/^!.*$/gm) || [], [], 'with no errors');
+  ok(!/Unknown graphics extension|Unicode character/.test(log3),
+    'no unreadable picture and no unknown character');
+
   console.log('\n=== 10. No page errors ===');
   ok(errs.length === 0, errs.length ? errs.join(' | ') : 'none');
 
