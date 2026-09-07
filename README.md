@@ -21,12 +21,19 @@ The URL can still be changed from the connection setup area if needed.
 
 ## Chapters
 
-The app covers two chapters, each with four parallel papers — 832 questions in total:
+The app covers three chapters, each with four parallel papers — 1,160 questions in total:
 
 | Chapter | Questions per paper | Papers |
 |---|---|---|
 | Chapters 01 & 02 | 114 | Original PDF worksheet, Version B, C, D |
 | Chapter 03 | 94 | Original PDF worksheet, Version B, C, D |
+| Chapter 12A | 82 | Version A, B, C, D |
+
+Chapter 12A is geometry: angles, polygons, area and perimeter, right triangles
+and similar figures (lesson codes 12-1.1 to 12-4.1). Its internal key is
+`ch12a`, **not** `ch12` — `ch12` has meant "Chapters 01 & 02" since before any
+other chapter existed and is written into session codes already stored in the
+Sheet, so it could not be reused for the chapter that happens to be called 12A.
 
 ## Choosing what a quiz covers
 
@@ -734,3 +741,58 @@ The reset needs one new column, **Must Change Password**, on both the `Trainees`
 and `Instructors` tabs. It is added automatically the first time the new
 `Code.gs` answers a request — existing rows are untouched and nothing is
 rewritten. There is no migration step to run.
+
+## Chapter 12A
+
+Geometry — angles, polygons, area and perimeter, right triangles and similar
+figures. Four papers of 82 questions, lesson codes `12-1.1` to `12-4.1`, with
+80 explanation videos.
+
+The versions are **A, B, C and D**. Unlike the other two chapters there is no
+"Original PDF worksheet": all four came from the teacher as parallel papers, and
+Version A is the one that carries the printed QR codes.
+
+### The chapter key
+
+Its key is **`ch12a`**. The obvious `ch12` was already taken — it has meant
+"Chapters 01 & 02" since before Chapter 03 existed, and session codes written
+with it are sitting in the Sheet. Handing `ch12` to the chapter called 12A would
+have silently redirected every one of those to the wrong paper. A later Chapter
+12B follows the same pattern (`ch12b`).
+
+### The drawings
+
+Nearly every question is set over a figure, and most of them keep their
+dimensions in the picture rather than in the sentence — "The area of the next
+trapezoid is", with the 10.0 m and 16.0 m written on the drawing.
+
+The figures are the worksheet's own TikZ, compiled with pdfLaTeX and converted
+to SVG, so what a trainee sees on screen is the same drawing that prints on the
+paper rather than a redrawing of it. There are **162 distinct drawings** across
+the four versions, in `figures_ch12a/`, named by a hash of their source so that
+the same drawing used by two versions is stored once. The palm-tree photograph
+on Q76 is a real image, one per version, in `images/`.
+
+### Version A's answer key
+
+The worksheet arrived with an answer key covering **versions B, C and D only**.
+Version A had none, so every one of its 82 answers was re-derived from the
+question and its drawing by `tools/ch12a/verify_ch12a.py`.
+
+What makes that trustworthy is that the same code, unchanged, was first run
+against the three versions that *do* have a key: it reproduces **246 of 246** of
+the teacher's answers, and `tools/ch12a/mutate_verifier.py` shows that all 48
+question families would have complained had one of those answers been wrong.
+Thirteen of Version A's answers are confirmed a second way, by a version that
+asks the identical question over the identical drawing.
+
+**If you have Version A's original key, it is worth comparing.** The derivation
+is careful and checked, but it is a derivation.
+
+### A trap to remember when comparing versions
+
+"The same question" is not "the same sentence". Q17–Q23 are all *Name the
+polygon* with the same four options, and Q45 is *what kind of triangle is this*
+— identical wording in every version, a different shape drawn in each. Anything
+that carries an answer from one version to another has to compare the drawing as
+well as the words.

@@ -1229,3 +1229,14 @@ body.exam-mode .app-header { padding-top: 14px; padding-bottom: 14px; }
   /* A temporary password is not something to leave on paper. */
   .reset-result { display: none !important; }
 }
+
+/* Chapter 12A names segments with a bar (DE, not D times E) and states Heron's
+   formula with a root sign. Both are drawn rather than dropped, because the
+   mark is what carries the meaning. */
+.overline { text-decoration: overline; }
+.sqrt { white-space: nowrap; }
+.sqrt .radicand {
+  border-top: 1px solid currentColor;
+  padding: 0 0.15em 0 0.1em;
+  margin-left: -0.08em;
+}
