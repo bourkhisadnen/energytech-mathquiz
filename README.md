@@ -27,7 +27,7 @@ The app covers three chapters, each with four parallel papers — 1,160 question
 |---|---|---|
 | Chapters 01 & 02 | 114 | Original PDF worksheet, Version B, C, D |
 | Chapter 03 | 94 | Original PDF worksheet, Version B, C, D |
-| Chapter 12A | 82 | Version A, B, C, D |
+| Chapter 12A | 82 | Original PDF worksheet, Version B, C, D |
 
 Chapter 12A is geometry: angles, polygons, area and perimeter, right triangles
 and similar figures (lesson codes 12-1.1 to 12-4.1). Its internal key is
@@ -748,9 +748,12 @@ Geometry — angles, polygons, area and perimeter, right triangles and similar
 figures. Four papers of 82 questions, lesson codes `12-1.1` to `12-4.1`, with
 80 explanation videos.
 
-The versions are **A, B, C and D**. Unlike the other two chapters there is no
-"Original PDF worksheet": all four came from the teacher as parallel papers, and
-Version A is the one that carries the printed QR codes.
+The versions are **A, B, C and D**. All four came from the teacher as parallel
+papers, but A is the one the QR codes and the answer-key gap (below) both point
+back to, so it is keyed and labeled **`original_pdf` / "Original PDF worksheet"**
+— the same convention Chapters 01 & 02 and Chapter 03 use for their base
+version, and the one `app.js`'s `SET_ORDER` lists first so the four papers
+sort A to D instead of falling through to alphabetical-by-key order.
 
 ### The chapter key
 
@@ -786,21 +789,21 @@ The PDFs are not precached: 3.5 MB on every trainee's device for a button only
 an instructor presses, and only while online. They are fetched when the export
 runs.
 
-### Version A's answer key
+### The original worksheet's answer key
 
 The worksheet arrived with an answer key covering **versions B, C and D only**.
-Version A had none, so every one of its 82 answers was re-derived from the
-question and its drawing by `tools/ch12a/verify_ch12a.py`.
+The original PDF worksheet had none, so every one of its 82 answers was
+re-derived from the question and its drawing by `tools/ch12a/verify_ch12a.py`.
 
 What makes that trustworthy is that the same code, unchanged, was first run
 against the three versions that *do* have a key: it reproduces **246 of 246** of
 the teacher's answers, and `tools/ch12a/mutate_verifier.py` shows that all 48
 question families would have complained had one of those answers been wrong.
-Thirteen of Version A's answers are confirmed a second way, by a version that
-asks the identical question over the identical drawing.
+Thirteen of the original worksheet's answers are confirmed a second way, by a
+version that asks the identical question over the identical drawing.
 
-**If you have Version A's original key, it is worth comparing.** The derivation
-is careful and checked, but it is a derivation.
+**If you have the original worksheet's official key, it is worth comparing.**
+The derivation is careful and checked, but it is a derivation.
 
 ### Exporting a Chapter 12A worksheet
 

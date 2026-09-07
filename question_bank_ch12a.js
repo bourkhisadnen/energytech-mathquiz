@@ -7,8 +7,8 @@
 // from the question and its drawing by tools/verify_ch12a.py, which
 // reproduces the supplied key for all 246 questions of B, C and D.
 window.QUESTION_BANK_SETS_CH12A = {
-  "version_a": {
-    "label": "Version A",
+  "original_pdf": {
+    "label": "Original PDF worksheet",
     "questions": [
       {
         "original_number": 1,

@@ -14,13 +14,18 @@ APP = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed'
 FIGDIR = os.path.join(APP, 'figures_ch12a')
 UPLOAD = '/root/.claude/uploads/31b6d1fd-3b78-5915-86b3-6a23229c570d'
 PHOTOS = {                                   # the palm-tree picture, one per version
-    'version_a': ('fig_q76.png', f'{UPLOAD}/ea12069b-image.png'),
+    'original_pdf': ('fig_q76.png', f'{UPLOAD}/ea12069b-image.png'),
     'version_b': ('fig_q76_B.png', f'{UPLOAD}/0166ef8c-image.png'),
     'version_c': ('fig_q76_C.png', f'{UPLOAD}/485123bd-image.png'),
     'version_d': ('fig_q76_D.png', f'{UPLOAD}/f4762f10-image.png'),
 }
-SETS = {'A': 'version_a', 'B': 'version_b', 'C': 'version_c', 'D': 'version_d'}
-LABELS = {'A': 'Version A', 'B': 'Version B', 'C': 'Version C', 'D': 'Version D'}
+# 'A' is the original worksheet exactly as the teacher supplied it, so it is
+# keyed and labeled the same way Chapters 01&02 and 03 key/label theirs
+# ("original_pdf" / "Original PDF worksheet"), not as a fourth parallel
+# version. This also puts it first in app.js's SET_ORDER, which lists
+# original_pdf before version_b/c/d.
+SETS = {'A': 'original_pdf', 'B': 'version_b', 'C': 'version_c', 'D': 'version_d'}
+LABELS = {'A': 'Original PDF worksheet', 'B': 'Version B', 'C': 'Version C', 'D': 'Version D'}
 
 
 def to_app_latex(s):
@@ -73,6 +78,20 @@ def build_bank():
     return out
 
 
+SCREEN_SCALE = 2.4   # pdftocairo sizes the SVG in PDF points (~1x); the app
+                      # scales the presentation width/height up so the drawing
+                      # is legible on screen. The viewBox is left untouched --
+                      # only the outer <svg width=.. height=..> changes.
+
+
+def scale_svg_for_screen(svg_text):
+    def repl(m):
+        return '%s="%.1f"' % (m.group(1), float(m.group(2)) * SCREEN_SCALE)
+    svg_text, n = re.subn(r'\b(width|height)="([\d.]+)"', repl, svg_text, count=2)
+    assert n == 2, 'expected exactly one width= and one height= on the <svg> tag'
+    return svg_text
+
+
 def copy_figures():
     os.makedirs(FIGDIR, exist_ok=True)
     for f in os.listdir(FIGDIR):
@@ -81,8 +100,14 @@ def copy_figures():
     used = {D[v][n]['sha'] for v in 'ABCD' for n in range(1, 83)
             if D[v][n]['figure']}
     for sha in sorted(used):
-        shutil.copy(f'/tmp/energytech_app/ch12new/figsvg/{sha}.svg',
-                    os.path.join(FIGDIR, sha + '.svg'))
+        svg = open(f'/tmp/energytech_app/ch12new/figsvg/{sha}.svg', encoding='utf-8').read()
+        open(os.path.join(FIGDIR, sha + '.svg'), 'w', encoding='utf-8').write(
+            scale_svg_for_screen(svg))
+        # The worksheet export needs a pdflatex-readable twin of every figure
+        # (see render_pdfs.py) alongside the browser's SVG. Keep both in sync
+        # here so a rebuild can never wipe one and leave the other stale.
+        shutil.copy(f'/tmp/energytech_app/ch12new/figpdf/{sha}.pdf',
+                    os.path.join(FIGDIR, sha + '.pdf'))
     for V_, setid in SETS.items():
         _, srcpath = PHOTOS[setid]
         shutil.copy(srcpath, os.path.join(APP, 'images', f'ch12a_q76_{V_.lower()}.png'))

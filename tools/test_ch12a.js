@@ -10,11 +10,14 @@
  * session codes already sitting in the Sheet. If the new chapter ever took that
  * key, every old session code would silently start serving the wrong paper.
  *
- * The second is Version A's answer key. The worksheet arrived with a key for
- * versions B, C and D only; Version A's was re-derived. So this suite checks the
- * three supplied keys against the ORIGINAL .tex file the teacher sent, rather
- * than against anything the build produced -- if the build ever mangles a key,
- * the answer sheet the trainees are marked against is what catches it.
+ * The second is the original worksheet's answer key -- stored under the same
+ * 'original_pdf' set id and "Original PDF worksheet" label Chapters 01 & 02
+ * and 03 use for theirs, not as a fourth parallel version. It arrived with a
+ * key for versions B, C and D only; the original's was re-derived. So this
+ * suite checks the three supplied keys against the ORIGINAL .tex file the
+ * teacher sent, rather than against anything the build produced -- if the
+ * build ever mangles a key, the answer sheet the trainees are marked against
+ * is what catches it.
  */
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -76,18 +79,18 @@ function officialKey() {
   eq(reg.label, 'Chapter 12A', 'and is named the way the worksheet names it');
   eq(reg.ch12Label, 'Chapters 01 & 02',
     "while 'ch12' still means Chapters 01 & 02 -- the old session codes depend on it");
-  eq(reg.sets, ['version_a', 'version_b', 'version_c', 'version_d'], 'four versions');
-  eq(reg.setLabels, ['Version A', 'Version B', 'Version C', 'Version D'], 'named A to D');
+  eq(reg.sets, ['original_pdf', 'version_b', 'version_c', 'version_d'], 'four versions, original first');
+  eq(reg.setLabels, ['Original PDF worksheet', 'Version B', 'Version C', 'Version D'], 'named to match Chapters 01/02/03\'s convention');
   eq(reg.counts, [82, 82, 82, 82], '82 questions each');
 
   console.log('\n=== 2. A key of its own, not a share of anybody else\'s ===');
   const keys = await page.evaluate(() => ({
-    a: parseSetKey('ch12a:version_a'),
+    a: parseSetKey('ch12a:original_pdf'),
     bare: parseSetKey('version_b'),
     old: parseSetKey('ch12:original_pdf'),
-    unknown: parseSetKey('ch99:version_a')
+    unknown: parseSetKey('ch99:original_pdf')
   }));
-  eq(keys.a, { chapterKey: 'ch12a', setId: 'version_a' }, 'ch12a:version_a reads as Chapter 12A');
+  eq(keys.a, { chapterKey: 'ch12a', setId: 'original_pdf' }, 'ch12a:original_pdf reads as Chapter 12A');
   eq(keys.old, { chapterKey: 'ch12', setId: 'original_pdf' }, 'ch12:original_pdf is untouched');
   eq(keys.bare.chapterKey, 'ch12', 'a bare key still falls back to Chapters 01 & 02');
   eq(keys.unknown.chapterKey, 'ch12', 'and so does a key naming a chapter that does not exist');
@@ -108,15 +111,15 @@ function officialKey() {
     ok(wrong.length === 0, `${v} matches the sheet the teacher sent${wrong.length ? ' (differs on Q' + wrong.join(', Q') + ')' : ''}`);
   }
 
-  console.log('\n=== 4. Version A, whose key was derived rather than supplied ===');
-  const a = stored.version_a;
+  console.log('\n=== 4. The original worksheet, whose key was derived rather than supplied ===');
+  const a = stored.original_pdf;
   ok(Object.values(a).every(v => 'abcd'.includes(v)), 'every question has an answer');
   eq(Object.keys(a).length, 82, 'all 82 of them');
   const spread = ['a', 'b', 'c', 'd'].map(L => Object.values(a).filter(v => v === L).length);
   ok(Math.max(...spread) <= 2 * Math.min(...spread),
     `and no letter carries the paper (a/b/c/d = ${spread.join('/')})`);
-  // Where Version A asks a question one of the keyed versions also asks, its
-  // answer must be the same words as that version's answer.
+  // Where the original worksheet asks a question one of the keyed versions
+  // also asks, its answer must be the same words as that version's answer.
   //
   // "The same question" has to include the picture. Q17 to Q23 are all "Name
   // the polygon" with the same four options, and Q45 is "what kind of triangle
@@ -130,7 +133,7 @@ function officialKey() {
     const pic = q => (q.diagram && q.diagram.src) || '';
     let compared = 0, differ = [], skippedForPicture = 0;
     for (let n = 1; n <= 82; n++) {
-      const qa = sets.version_a.questions[n - 1];
+      const qa = sets.original_pdf.questions[n - 1];
       for (const v of ['version_b', 'version_c', 'version_d']) {
         const qx = sets[v].questions[n - 1];
         if (norm(qa.body) !== norm(qx.body)) continue;
@@ -145,13 +148,13 @@ function officialKey() {
   });
   ok(agree.skippedForPicture > 0,
     `${agree.skippedForPicture} same-worded questions are set over a different drawing and are not comparable`);
-  ok(agree.compared > 0, `${agree.compared} of Version A's answers can be cross-checked against a supplied key`);
+  ok(agree.compared > 0, `${agree.compared} of the original worksheet's answers can be cross-checked against a supplied key`);
   eq(agree.differ, [], 'and every one of them names the same answer');
 
   console.log('\n=== 5. Every drawing is there and belongs to this chapter ===');
   const built = await page.evaluate(() => {
     selectAll(false);
-    setPaperSelected(paperByKey('ch12a:version_a'), true);
+    setPaperSelected(paperByKey('ch12a:original_pdf'), true);
     afterSelectionChange();
     setCountValue(totalSelected());
     generateQuiz();
@@ -173,7 +176,7 @@ function officialKey() {
   // most exposed to: 162 files named by a hash, and a question whose dimensions
   // live only in the picture. Q31's trapezoid must be the one measuring 16.0 m.
   const q31 = await page.evaluate(async () => {
-    const q = QUESTION_BANK_SETS_CH12A.version_a.questions[30];
+    const q = QUESTION_BANK_SETS_CH12A.original_pdf.questions[30];
     const svg = await fetch(q.diagram.src).then(r => r.text());
     return { src: q.diagram.src, has16: /16\.0/.test(svg), has10: /10\.0/.test(svg), answer: q.answer };
   });
@@ -202,7 +205,7 @@ function officialKey() {
   eq(vids.shared, 0, 'and no link is shared with another chapter');
 
   console.log('\n=== 8. Marking ===');
-  for (const v of ['version_a', 'version_b', 'version_c', 'version_d']) {
+  for (const v of ['original_pdf', 'version_b', 'version_c', 'version_d']) {
     const r = await page.evaluate(k => {
       selectAll(false);
       setPaperSelected(paperByKey(k), true);

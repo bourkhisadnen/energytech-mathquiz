@@ -348,9 +348,9 @@ console.log('\n=== 12. Chapter 12A: SVG on screen, PDF in the worksheet ===');
   eq(svgAbsent, [], 'and so does the file the SCREEN uses, which is a different one');
 
   // Then compile a whole paper, which is the check that would have caught both.
-  const paper = BANK.filter(q => q.__set === 'ch12a:version_a');
+  const paper = BANK.filter(q => q.__set === 'ch12a:original_pdf');
   const built = compile('ch12a', paper, Object.assign({}, SESSION, {
-    sessionName: 'Chapter 12A', questionSet: 'Chapter 12A — Version A' }));
+    sessionName: 'Chapter 12A', questionSet: 'Chapter 12A — Original PDF worksheet' }));
   ok(built.compiled, 'a whole Chapter 12A paper compiles');
   eq(built.errors, [], `with no errors${built.firstError ? ' (' + built.firstError + ')' : ''}`);
 

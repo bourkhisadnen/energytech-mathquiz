@@ -71,20 +71,32 @@ const textOf = (p, sel) => p.evaluate(s => {
  * picture questions sent bare LaTeX, and the zip assertions below failed on a
  * file that was never a zip. Each section now states which branch it expects
  * and checks the paper really is that shape before relying on it. */
-async function makeSession(p, { label, count, mode, name, seed }) {
+async function makeSession(p, { label, paperKey, count, mode, name, seed }) {
   await p.evaluate(s => {
     const el = document.getElementById('seedInput');
     if (el) { el.value = s; el.dispatchEvent(new Event('input', { bubbles: true })); }
   }, seed || 'WS-TEST-SEED');
-  await p.evaluate(t => {
-    const box = [...document.querySelectorAll('#questionTree input[type=checkbox]')]
-      .find(b => {
-        const row = b.closest('label') || b.parentElement;
-        return row && row.textContent.includes(t);
-      });
-    if (!box) throw new Error('no tick box matching ' + t);
-    if (!box.checked) box.click();
-  }, label);
+  // paperKey selects one exact paper's checkbox by its data-paper key
+  // (e.g. "ch12a:original_pdf"), which label-text matching can no longer do
+  // now that several chapters share the "Original PDF worksheet" label --
+  // label stays available for chapter-level rows, whose text is unique.
+  if (paperKey) {
+    await p.evaluate(k => {
+      const box = document.querySelector(`#questionTree input[data-level="paper"][data-paper="${k}"]`);
+      if (!box) throw new Error('no tick box for paper ' + k);
+      if (!box.checked) box.click();
+    }, paperKey);
+  } else {
+    await p.evaluate(t => {
+      const box = [...document.querySelectorAll('#questionTree input[type=checkbox]')]
+        .find(b => {
+          const row = b.closest('label') || b.parentElement;
+          return row && row.textContent.includes(t);
+        });
+      if (!box) throw new Error('no tick box matching ' + t);
+      if (!box.checked) box.click();
+    }, label);
+  }
   await p.waitForTimeout(250);
   await p.evaluate(n => {
     const el = document.getElementById('questionCount');
@@ -297,7 +309,11 @@ print('etFeedback' in blobs.get('ETW02lib',''))
     document.querySelectorAll('#questionTree input[type=checkbox]').forEach(b => { if (b.checked) b.click(); });
   });
   await p.waitForTimeout(300);
-  await makeSession(p, { label: 'Version A', count: 9999, mode: 'practice', name: 'Ch12A practice' });
+  // Select this one paper by its data-paper key rather than by label text:
+  // now that the original worksheet's paper is labeled "Original PDF
+  // worksheet" -- the same label Chapters 01 & 02 and 03 use for theirs -- a
+  // text match on that label alone would hit the wrong chapter's row.
+  await makeSession(p, { paperKey: 'ch12a:original_pdf', count: 9999, mode: 'practice', name: 'Ch12A practice' });
   const geoCount = await p.evaluate(() => WorksheetExport.imagesUsedBy(currentQuiz).length);
   ok(geoCount > 40, `the geometry paper carries ${geoCount} drawings`);
   overleafPosts = [];
