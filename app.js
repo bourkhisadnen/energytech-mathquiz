@@ -25,7 +25,8 @@ const $ = (id) => document.getElementById(id);
 const CHAPTERS = {
   ch12: { label: 'Chapters 01 & 02', sets: () => window.QUESTION_BANK_SETS || {} },
   ch03: { label: 'Chapter 03', sets: () => window.QUESTION_BANK_SETS_CH03 || {} },
-  ch12a: { label: 'Chapter 12A', sets: () => window.QUESTION_BANK_SETS_CH12A || {} }
+  ch12a: { label: 'Chapter 12A', sets: () => window.QUESTION_BANK_SETS_CH12A || {} },
+  ch04: { label: 'Chapter 04', sets: () => window.QUESTION_BANK_SETS_CH04 || {} }
 };
 const DEFAULT_CHAPTER = 'ch12';
 const DEFAULT_SET = 'original_pdf';

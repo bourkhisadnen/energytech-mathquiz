@@ -44,9 +44,9 @@ function ok(cond, label) {
   const papers = await page.evaluate(() => allPapers().map(p => ({
     key: p.key, chapter: p.chapterKey, label: p.setLabel, n: p.questions.length
   })));
-  ok(papers.length === 12, `twelve papers on record (${papers.length})`);
-  ok(new Set(papers.map(p => p.chapter)).size === 3,
-    `across three chapters (${[...new Set(papers.map(p => p.chapter))].join(', ')})`);
+  ok(papers.length === 16, `sixteen papers on record (${papers.length})`);
+  ok(new Set(papers.map(p => p.chapter)).size === 4,
+    `across four chapters (${[...new Set(papers.map(p => p.chapter))].join(', ')})`);
 
   for (const paper of papers) {
     console.log(`\n=== ${paper.chapter} / ${paper.label} (${paper.n} questions) ===`);
@@ -60,18 +60,23 @@ function ok(cond, label) {
     }, paper.key);
     ok(built === paper.n, `all ${paper.n} questions built`);
 
-    const bad = await page.evaluate(() => {
+    const bad = await page.evaluate((ch) => {
       const out = { noText: 0, notFour: 0, dupChoice: 0, noKey: 0, badKey: 0 };
       currentQuiz.forEach(q => {
         if (!q.body || !String(q.body).trim()) out.noText++;
         const opts = String(q.choices || '').split('\\item').slice(1).map(s => s.trim()).filter(Boolean);
         if (opts.length !== 4) out.notFour++;
-        if (new Set(opts).size !== opts.length) out.dupChoice++;
+        // ch04's own Q45, on the teacher-supplied Original PDF worksheet, has
+        // two textually-identical decoy choices in the source .tex itself (a
+        // copy/paste slip, not a build defect) -- documented in test_ch04.js
+        // and harmless (the unique correct answer isn't one of the duplicates).
+        const isKnownDup = ch === 'ch04' && q.original_number === 45;
+        if (new Set(opts).size !== opts.length && !isKnownDup) out.dupChoice++;
         if (!q.answer) out.noKey++;
         else if (!['a', 'b', 'c', 'd'].includes(q.answer)) out.badKey++;
       });
       return out;
-    });
+    }, paper.chapter);
     ok(Object.values(bad).every(v => v === 0),
       `every question has text, 4 distinct choices and a key (${JSON.stringify(bad)})`);
 
@@ -86,7 +91,8 @@ function ok(cond, label) {
       const OWNED = {
         ch12: [/(^|\/)images\/original_/],
         ch03: [/(^|\/)images\/ch03_/],
-        ch12a: [/(^|\/)figures_ch12a\//, /(^|\/)images\/ch12a_/]
+        ch12a: [/(^|\/)figures_ch12a\//, /(^|\/)images\/ch12a_/],
+        ch04: [/(^|\/)figures_ch04\//, /(^|\/)images\/ch04_/]
       };
       const mine = OWNED[ch] || [];
       return [...document.querySelectorAll('#quizContainer img')]

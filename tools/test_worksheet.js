@@ -16,6 +16,7 @@ global.window = {};
 require(APP + '/question_bank.js');
 require(APP + '/question_bank_ch03.js');
 require(APP + '/question_bank_ch12a.js');
+require(APP + '/question_bank_ch04.js');
 const W = require(APP + '/worksheet_tex.js');
 
 let failures = [], checks = 0;
@@ -29,6 +30,8 @@ for (const [k, v] of Object.entries(window.QUESTION_BANK_SETS_CH03 || {}))
   v.questions.forEach(q => BANK.push(Object.assign({ __set: 'ch03:' + k }, q)));
 for (const [k, v] of Object.entries(window.QUESTION_BANK_SETS_CH12A || {}))
   v.questions.forEach(q => BANK.push(Object.assign({ __set: 'ch12a:' + k }, q)));
+for (const [k, v] of Object.entries(window.QUESTION_BANK_SETS_CH04 || {}))
+  v.questions.forEach(q => BANK.push(Object.assign({ __set: 'ch04:' + k }, q)));
 
 const SESSION = { sessionCode: 'G1-9001', sessionName: 'Midterm exam', intake: 'JAN26',
                   group: 'G1', mode: 'assessment', questionSet: 'Chapters 01 & 02' };
@@ -364,6 +367,60 @@ console.log('\n=== 12. Chapter 12A: SVG on screen, PDF in the worksheet ===');
     || (log.match(/\.pdf>/g) || []).length;
   ok(drawn >= built.out.images.length,
     `all ${built.out.images.length} drawings were read into the document (${drawn})`);
+}
+
+console.log('\n=== 13. Chapter 04: SVG on screen, PDF in the worksheet ===');
+// Same hazard as Chapter 12A's section above, checked fresh for this chapter's
+// own figures rather than assumed to be fine because that chapter's check
+// passed: the 32 scale drawings are SVG for the browser and need their own PDF
+// twin for pdflatex, and the two shared reference photos (labelled caliper and
+// micrometer) must be bundled and named correctly too.
+{
+  const ch04 = BANK.filter(q => q.__set.startsWith('ch04:'));
+  ok(ch04.length === 200, `the chapter is in this test's bank (${ch04.length} questions)`);
+
+  const withPictures = ch04.filter(q => q.diagram && q.diagram.type === 'image');
+  ok(withPictures.length > 0, `${withPictures.length} of them carry a picture`);
+
+  const wanted = W.imagesUsedBy(withPictures);
+  eq(wanted.filter(s => /\.svg$/i.test(s)), [], 'no SVG is offered to pdflatex');
+  ok(wanted.every(s => /\.(pdf|png|jpe?g)$/i.test(s)),
+    'every bundled picture is a format pdflatex can read');
+  const named = withPictures.map(q => {
+    const m = W.diagramTexFor(q).match(/\{([^{}]+\.(?:pdf|png|jpe?g))\}/i);
+    return m ? m[1] : null;
+  });
+  eq(named.filter(n => !n), [], 'and every picture question names a file it can read');
+  const packed = new Set(wanted.map(s => s.replace(/^.*\//, '')));
+  eq([...new Set(named)].filter(n => !packed.has(n)), [],
+    'each file named in the document is one of the files packed beside it');
+
+  const absent = wanted.filter(s => !fs.existsSync(path.join(APP, s)));
+  eq(absent, [], 'every picture the worksheet asks for exists on disk');
+  const svgAbsent = withPictures
+    .map(q => q.diagram.src)
+    .filter(s => /\.svg$/i.test(s) && !fs.existsSync(path.join(APP, s)));
+  eq(svgAbsent, [], 'and so does the SVG the SCREEN uses, for every drawing (not the two shared photos)');
+
+  // Then compile a whole paper, which is the check that would actually catch
+  // a figure the browser shows but pdflatex chokes on (or a photo whose PDF
+  // twin was never built).
+  const paper = BANK.filter(q => q.__set === 'ch04:original_pdf');
+  const built = compile('ch04', paper, Object.assign({}, SESSION, {
+    sessionName: 'Chapter 04', questionSet: 'Chapter 04 — Original PDF worksheet' }));
+  ok(built.compiled, 'a whole Chapter 04 paper compiles');
+  eq(built.errors, [], `with no errors${built.firstError ? ' (' + built.firstError + ')' : ''}`);
+
+  const log = fs.readFileSync(path.join(built.dir, 'worksheet.log'), 'utf8');
+  ok(!/Unknown graphics extension/.test(log), 'and pdflatex recognised every picture');
+  ok(!/Unicode character/.test(log),
+    'and knew every character in it, the ellipsis included');
+  // Unlike Chapter 12A (every picture an SVG-turned-PDF figure), this chapter
+  // also bundles two plain PNG photos, which pdflatex logs as "<use x.png>"
+  // rather than "x.pdf" -- count both extensions rather than just the one.
+  const drawn = (log.match(/<use [^>]*\.(?:pdf|png)/g) || []).length;
+  ok(drawn >= built.out.images.length,
+    `all ${built.out.images.length} pictures were read into the document (${drawn})`);
 }
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

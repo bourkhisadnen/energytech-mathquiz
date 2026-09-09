@@ -4,6 +4,10 @@
 //   ch12a: 80 links; Q17 and Q21 carry no QR code on the sheet
 //   ch03: 74 links; the 20 "which unit would you use" questions carry no QR code
 //         (Q25-Q30, Q35-Q40, Q47, Q49, Q67, Q68, Q83, Q84, Q93, Q94)
+//   ch04: 50 links; every question carries a QR code, and (unlike ch12a/ch03)
+//         the URL is literal text in the .tex source rather than something
+//         decoded off a rendered image, so this block was built by reading
+//         \qrcode[...]{URL} directly out of the worksheet
 window.EXPLANATION_VIDEO_LINKS = {
   "ch12": {
     "1": "https://www.youtube.com/watch?v=XXjhkbUfLNI",
@@ -271,5 +275,57 @@ window.EXPLANATION_VIDEO_LINKS = {
     "80": "https://www.youtube.com/watch?v=RGrf8M8wguw",
     "81": "https://www.youtube.com/watch?v=3PljSvY5J0M",
     "82": "https://www.youtube.com/watch?v=RTQpTU4Wn1M"
+  },
+  "ch04": {
+    "1": "https://www.youtube.com/watch?v=FhLOHZ4jlP8",
+    "2": "https://www.youtube.com/watch?v=O2WRBUsIeZc",
+    "3": "https://www.youtube.com/watch?v=29VCgAWuS08",
+    "4": "https://www.youtube.com/watch?v=gEq2wwiqNB8",
+    "5": "https://www.youtube.com/watch?v=_FD3dS7Vg3U",
+    "6": "https://www.youtube.com/watch?v=NZMZXixpuv4",
+    "7": "https://www.youtube.com/watch?v=xKxx56lye3g",
+    "8": "https://www.youtube.com/watch?v=1JnWFd0IspY",
+    "9": "https://www.youtube.com/watch?v=kZ6FfJt_LTA",
+    "10": "https://www.youtube.com/watch?v=Uptz7jfWnVI",
+    "11": "https://www.youtube.com/watch?v=SE7YQtbcBeg",
+    "12": "https://www.youtube.com/watch?v=cksn4vK3mhk",
+    "13": "https://www.youtube.com/watch?v=L-TsjdvD7ZQ",
+    "14": "https://www.youtube.com/watch?v=QKBMWpAA95s",
+    "15": "https://www.youtube.com/watch?v=7kzsFh5ax-8",
+    "16": "https://www.youtube.com/watch?v=FbGULnhUr58",
+    "17": "https://www.youtube.com/watch?v=8v8T6GLrV7M",
+    "18": "https://www.youtube.com/watch?v=CKAhOUBv_Ck",
+    "19": "https://www.youtube.com/watch?v=eydw_enMeQk",
+    "20": "https://www.youtube.com/watch?v=m5Lp71cWcFE",
+    "21": "https://www.youtube.com/watch?v=xVg0hxrQ4Jg",
+    "22": "https://www.youtube.com/watch?v=wcmLZgkqi3M",
+    "23": "https://www.youtube.com/watch?v=bXo3POT01eE",
+    "24": "https://www.youtube.com/watch?v=0XkBVkZvfvA",
+    "25": "https://www.youtube.com/watch?v=89Bz6HZpME8",
+    "26": "https://www.youtube.com/watch?v=n0lpdXKX8NA",
+    "27": "https://www.youtube.com/watch?v=MplthM6FZQU",
+    "28": "https://www.youtube.com/watch?v=tTfhEPs7AG4",
+    "29": "https://www.youtube.com/watch?v=BSleiTcnV88",
+    "30": "https://www.youtube.com/watch?v=wFtUtuKgrnI",
+    "31": "https://www.youtube.com/watch?v=fi2FP7z8XXk",
+    "32": "https://www.youtube.com/watch?v=S8T8OfIpWdU",
+    "33": "https://www.youtube.com/watch?v=kmIhRWkySiY",
+    "34": "https://www.youtube.com/watch?v=i50ZER16Vic",
+    "35": "https://www.youtube.com/watch?v=M7AB8u72_8k",
+    "36": "https://www.youtube.com/watch?v=d32PX6zaUhM",
+    "37": "https://www.youtube.com/watch?v=kfDJ24QBcuI",
+    "38": "https://www.youtube.com/watch?v=CdvPb7S0h9Y",
+    "39": "https://www.youtube.com/watch?v=mdd_74Yj1iA",
+    "40": "https://www.youtube.com/watch?v=L0pMHrjqsEg",
+    "41": "https://www.youtube.com/watch?v=nQ0DitEi1Ps",
+    "42": "https://www.youtube.com/watch?v=Y1cHxGjrkjU",
+    "43": "https://www.youtube.com/watch?v=eBSkNlhA6Wc",
+    "44": "https://www.youtube.com/watch?v=toC9PYl0yHk",
+    "45": "https://www.youtube.com/watch?v=_Xjo5E_pcYo",
+    "46": "https://www.youtube.com/watch?v=vd7Sg-5mZc0",
+    "47": "https://www.youtube.com/watch?v=rLAH-4JSDRo",
+    "48": "https://www.youtube.com/watch?v=rGtejzjn64U",
+    "49": "https://www.youtube.com/watch?v=OVOHkqfkrEI",
+    "50": "https://www.youtube.com/watch?v=6P8cDZvSm3M"
   }
 };

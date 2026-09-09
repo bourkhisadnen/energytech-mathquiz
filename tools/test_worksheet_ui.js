@@ -354,6 +354,52 @@ print('etFeedback' in blobs.get('ETW02lib',''))
   ok(!/Unknown graphics extension|Unicode character/.test(log3),
     'no unreadable picture and no unknown character');
 
+  console.log('\n=== 9c. Chapter 04 travels as PDF drawings and PNG photos, not the SVG on screen ===');
+  // Same concern as 9b, checked fresh for this chapter: 32 SVG scale drawings
+  // that must travel as their PDF twins, plus two shared reference photos
+  // (labelled caliper, labelled micrometer) that travel as plain PNGs.
+  await p.evaluate(() => {
+    document.querySelectorAll('#questionTree input[type=checkbox]').forEach(b => { if (b.checked) b.click(); });
+  });
+  await p.waitForTimeout(300);
+  await makeSession(p, { paperKey: 'ch04:original_pdf', count: 9999, mode: 'practice', name: 'Ch04 practice' });
+  const ch04Count = await p.evaluate(() => WorksheetExport.imagesUsedBy(currentQuiz).length);
+  ok(ch04Count > 0, `the measurement paper carries ${ch04Count} pictures`);
+  overleafPosts = [];
+  await p.waitForTimeout(1500);         // let the drawings/photos prefetch
+  await p.click('#overleafExportBtn');
+  await p.waitForTimeout(1500);
+  eq(overleafPosts.length, 1, 'one POST for the measurement paper');
+  const uri4 = new URLSearchParams(overleafPosts[0].body).get('snip_uri') || '';
+  ok(/^data:application\/zip;base64,/.test(uri4), 'sent as a zip, because it carries drawings');
+
+  const zip4 = path.join(tmp, 'ch04.zip');
+  fs.writeFileSync(zip4, Buffer.from(uri4.replace(/^data:application\/zip;base64,/, ''), 'base64'));
+  const list4 = execFileSync('unzip', ['-Z1', zip4], { encoding: 'utf8' }).trim().split('\n');
+  eq(list4.filter(n => /\.svg$/i.test(n)), [], 'not one SVG is in the bundle');
+  const asked4 = await p.evaluate(() =>
+    WorksheetExport.imagesUsedBy(currentQuiz).map(s => s.replace(/^.*\//, '')));
+  eq(asked4.filter(n => !list4.includes(n)), [],
+    `all ${ch04Count} pictures the paper asks for are in the bundle`);
+  ok(list4.some(n => /\.png$/i.test(n)), 'the two reference photos travel as PNGs');
+  ok(list4.filter(n => /\.pdf$/i.test(n)).length > 0, 'and the scale drawings travel as vector PDFs');
+
+  const dir4 = path.join(tmp, 'ch04build');
+  fs.mkdirSync(dir4, { recursive: true });
+  execFileSync('unzip', ['-o', zip4, '-d', dir4], { stdio: 'pipe' });
+  let built4 = false;
+  try {
+    for (let pass = 0; pass < 2; pass++)
+      execFileSync('pdflatex', ['-interaction=nonstopmode', 'worksheet.tex'], { cwd: dir4, stdio: 'pipe' });
+    built4 = fs.existsSync(path.join(dir4, 'worksheet.pdf'));
+  } catch { /* the log is the verdict */ }
+  const log4 = fs.existsSync(path.join(dir4, 'worksheet.log'))
+    ? fs.readFileSync(path.join(dir4, 'worksheet.log'), 'utf8') : '';
+  ok(built4, 'the bundle the browser posted compiles');
+  eq(log4.match(/^!.*$/gm) || [], [], 'with no errors');
+  ok(!/Unknown graphics extension|Unicode character/.test(log4),
+    'no unreadable picture and no unknown character');
+
   console.log('\n=== 10. No page errors ===');
   ok(errs.length === 0, errs.length ? errs.join(' | ') : 'none');
 

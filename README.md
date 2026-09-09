@@ -21,19 +21,25 @@ The URL can still be changed from the connection setup area if needed.
 
 ## Chapters
 
-The app covers three chapters, each with four parallel papers — 1,160 questions in total:
+The app covers four chapters, each with four parallel papers — 1,360 questions in total:
 
 | Chapter | Questions per paper | Papers |
 |---|---|---|
 | Chapters 01 & 02 | 114 | Original PDF worksheet, Version B, C, D |
 | Chapter 03 | 94 | Original PDF worksheet, Version B, C, D |
 | Chapter 12A | 82 | Original PDF worksheet, Version B, C, D |
+| Chapter 04 | 50 | Original PDF worksheet, Version B, C, D |
 
 Chapter 12A is geometry: angles, polygons, area and perimeter, right triangles
 and similar figures (lesson codes 12-1.1 to 12-4.1). Its internal key is
 `ch12a`, **not** `ch12` — `ch12` has meant "Chapters 01 & 02" since before any
 other chapter existed and is written into session codes already stored in the
 Sheet, so it could not be reused for the chapter that happens to be called 12A.
+
+Chapter 04 is measurement: significant figures, precision, greatest possible
+error, reading a vernier caliper and a micrometer, comparing accuracy, and
+significant-figure arithmetic (lesson codes 4-1.1 to 4-6.1). Its internal key
+is `ch04`, with no naming conflict to work around this time.
 
 ## Choosing what a quiz covers
 
@@ -826,3 +832,93 @@ polygon* with the same four options, and Q45 is *what kind of triangle is this*
 — identical wording in every version, a different shape drawn in each. Anything
 that carries an answer from one version to another has to compare the drawing as
 well as the words.
+
+## Chapter 04
+
+Measurement — significant figures, precision, greatest possible error, reading
+a vernier caliper and a micrometer, comparing the accuracy of two measurements,
+and significant-figure arithmetic. Four papers of 50 questions, lesson codes
+`4-1.1` to `4-6.1`, with 50 explanation videos (every question on this sheet
+carries a QR code — no exceptions, unlike Chapters 01 & 02, 03 or 12A).
+
+The versions are **A, B, C and D**. A is the teacher-supplied original, keyed
+and labeled **`original_pdf` / "Original PDF worksheet"** from the very first
+build of this chapter — following the convention Chapters 01 & 02, 03 and 12A
+all use for their base version, without the `version_a`-then-rename detour
+Chapter 12A needed before that convention was applied to it.
+
+### The chapter key
+
+Its key is **`ch04`**, with no naming conflict to route around — Chapter 04 is
+also the fourth chapter added to this app, so (unlike Chapter 12A and `ch12`)
+there was never a clash with an older meaning of the obvious key.
+
+### The drawings
+
+Twenty of the fifty questions per version carry a picture:
+
+- **32 vernier caliper / micrometer scale drawings**, one per reading question
+  (Q20–Q23, Q26–Q29) per version — the worksheet's own TikZ, compiled with
+  pdfLaTeX exactly as Chapter 12A's are, in `figures_ch04/`, named by a hash of
+  their source. Each is stored twice from the same compile, `<hash>.svg` for
+  the screen and `<hash>.pdf` for the worksheet export, for the same reason
+  Chapter 12A's are: pdfLaTeX cannot read SVG at all.
+- **2 shared reference photographs** — a labelled vernier caliper and a
+  labelled micrometer — used by the "name the part" questions (Q18/19 and
+  Q24/25). Unlike Chapter 12A's photograph, which is a different picture in
+  every version, these two are the *same* picture in all four versions: they
+  are reference diagrams, not randomized artwork, so there is one
+  `ch04_caliper.png` and one `ch04_micrometer.png` in `images/`, not four.
+
+### The original worksheet's answer key
+
+The worksheet arrived with an answer key covering **versions B, C and D only**.
+The original PDF worksheet had none, so every one of its 50 answers was
+re-derived from the question and, where there is one, its figure — reading the
+TikZ source's raw tick coordinates directly (`tools/ch04/scalereader.py`), the
+same idea as Chapter 12A's `geom.py` but for scale instruments instead of
+polygons.
+
+What makes that trustworthy is that the same code, unchanged, was first run
+against the three versions that *do* have a key: it reproduces **150 of 150**
+of the teacher's answers, and `tools/ch04/mutate_ch04.py` shows that all 13
+question families would have complained had one of those answers been wrong.
+The four "name the part" questions are confirmed a second way, by elimination
+against the same shared reference photo every version uses.
+
+One reading question (a "read the vernier caliper in inches" figure) has no
+visual anchor for which whole inch is meant when the window shown doesn't cross
+a whole-inch mark — an irreducible ambiguity in that one generated figure, not
+a gap in the derivation. It was resolved by noticing that the *same* figure's
+mm scale, read the same way, gives a close cross-check once converted to
+inches — and that this is exactly the trick behind one of the paper's own
+decoy choices (a mm reading, mislabeled in inches) on both this question and
+the one version-D question the B/C/D validation could not otherwise settle.
+
+**If you have the original worksheet's official key, it is worth comparing.**
+The derivation is careful and checked, but it is a derivation.
+
+### Two quirks carried forward from the teacher's file, not "fixed"
+
+- **Q4's lesson code** reads `1-1.1` instead of `4-1.1`, in all four versions.
+  It is a one-off typo in the source `.tex`, preserved as written rather than
+  silently corrected — `test_ch04.js` checks for exactly this one exception.
+- **Version A's Q45** has two textually-identical decoy choices (options A and
+  C both read "$206{,}700$ cm$^2$"). It does not affect correctness — the
+  unique 2-significant-figure answer, $210{,}000$ cm$^2$, is option B — but a
+  trainee who marks the "other" 206,700 would be marked wrong for choosing text
+  that reads the same as a listed option.
+
+### Exporting a Chapter 04 worksheet
+
+The same two concerns as Chapter 12A's export apply here, and are covered by
+the same style of check, extended to this chapter's own files
+(`test_worksheet.js` §13, `test_worksheet_ui.js` §9c):
+
+1. **The pictures go as PDF or PNG, not SVG.** The 32 scale drawings go through
+   `worksheetImageSrc`'s SVG→PDF swap exactly like Chapter 12A's figures do;
+   the two shared reference photos are already PNG and pass through unchanged.
+2. **The ellipsis character is declared.** Chapter 04's LaTeX uses `\ldots`,
+   converted to the ellipsis character at build time the same way Chapter 12A's
+   ∠/∥ are — already covered by the kernel's existing Unicode declarations, so
+   no new `\DeclareUnicodeCharacter` was needed for this chapter.

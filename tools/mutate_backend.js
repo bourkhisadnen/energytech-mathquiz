@@ -207,6 +207,62 @@ const MUTANTS = [
     suite: 'test_exam_release.js'
   },
 
+  /* --- resetting a forgotten password --- */
+  {
+    what: 'a reset instructor account is never asked to choose its own password',
+    from: "  sheet.getRange(found.rowNumber, 13).setValue(true);",
+    to:   "  ;",
+    suite: 'test_password_reset.js'
+  },
+  {
+    what: 'a reset trainee account is never asked to choose its own password',
+    from: "  sheet.getRange(found.rowNumber, 12).setValue(true);",
+    to:   "  ;",
+    suite: 'test_password_reset.js'
+  },
+  {
+    what: '"must change" stops being enforced, so a password read aloud keeps working',
+    from: "  if (!flagged) return null;",
+    to:   "  return null;",
+    suite: 'test_password_reset.js'
+  },
+  {
+    what: 'a reset leaves the old session alive on whatever device had it',
+    from: "  sheet.getRange(found.rowNumber, 11, 1, 2).setValues([['', '']]);   // sign them out everywhere",
+    to:   "  ;",
+    suite: 'test_password_reset.js'
+  },
+  {
+    what: 'any instructor, not only an admin, may reset a trainee\'s password',
+    from: "function adminResetTraineePassword_(params) {\n  const auth = requireAdmin_(params);",
+    to:   "function adminResetTraineePassword_(params) {\n  const auth = requireAuth_(params);",
+    suite: 'test_password_reset.js'
+  },
+  {
+    what: 'an admin may reset their own password, signing themselves out mid-action',
+    from: "    return { ok: false, error: 'Use Change password to change your own. A reset is for somebody else\\'s account.' };",
+    to:   "    ;",
+    suite: 'test_password_reset.js'
+  },
+  {
+    what: 'a trainee with no account is handed a password for a login that does not exist',
+    from: "  if (status === 'none') {\n    return { ok: false, error: 'Trainee ' + id + ' has no account yet. They should use \"Create my account\" and choose their own password.' };\n  }",
+    to:   "  if (false) {\n    return { ok: false, error: 'no account' };\n  }",
+    suite: 'test_password_reset.js'
+  },
+  {
+    what: 'a paper sat by a reset trainee is filed under whatever the browser typed',
+    from: "    } else if (t.mustChangePassword) {",
+    to:   "    } else if (false) {",
+    suite: 'test_password_reset.js'
+  },
+  {
+    what: 'changing the password does not clear the flag, so they are asked for ever',
+    from: "  sheet.getRange(auth.rowNumber, 13).setValue('');    // they have chosen their own now",
+    to:   "  ;",
+    suite: 'test_password_reset.js'
+  },
+
   /* --- setup() must never be the thing that loses the records --- */
   {
     what: 'setup() clears the sheets again, as it used to',
@@ -348,6 +404,38 @@ const APP_MUTANTS = [
     to:   "    $('studentQuizContainer').addEventListener('change', () => {});",
     suite: 'test_exam_view.js'
   },
+  /* --- resetting a forgotten password, on the screen --- */
+  {
+    what: 'the app opens the interface anyway, so the temporary password is enough to work with',
+    from: "    if (data.mustChangePassword) {\n      if ($('teacherLoginPassword')) $('teacherLoginPassword').value = '';",
+    to:   "    if (false) {\n      if ($('teacherLoginPassword')) $('teacherLoginPassword').value = '';",
+    suite: 'test_password_reset_ui.js'
+  },
+  {
+    what: 'a reset trainee is let straight through to the quiz screen',
+    from: "    if (data.mustChangePassword) {\n      if ($('traineeLoginPassword')) $('traineeLoginPassword').value = '';",
+    to:   "    if (false) {\n      if ($('traineeLoginPassword')) $('traineeLoginPassword').value = '';",
+    suite: 'test_password_reset_ui.js'
+  },
+  {
+    what: 'the form accepts the temporary password as the new one',
+    from: "  if (pw === forcedChange.oldPassword) {",
+    to:   "  if (false) {",
+    suite: 'test_password_reset_ui.js'
+  },
+  {
+    what: 'the lone admin is never told nobody can reset them',
+    from: "  const admins = list.filter(i => i.role === 'admin' && i.status === 'approved');",
+    to:   "  const admins = list.filter(i => false);\n  admins.push(1, 2);",
+    suite: 'test_password_reset_ui.js'
+  },
+  {
+    what: 'the compatibility guard goes back to reading any bare message as an old deployment',
+    from: "  if (data.ok && /backend is running/i.test(String(data.message || ''))) {",
+    to:   "  if (data.ok && data.message && !data.intakes && !data.trainees && !data.trainee\n      && data.added === undefined && !data.label && !data.name && !data.deleted\n      && !data.energytechId && !data.token && !data.status) {",
+    suite: 'test_password_reset_ui.js'
+  },
+
   /* --- the explanation video on the question it belongs to --- */
   {
     what: 'the video stops being withheld on an exam, naming the method for a marked question',
@@ -470,6 +558,50 @@ const APP_MUTANTS = [
     from: '            <tr><th class="group-th" colspan="4">Group ${escapeHtml(g.name)}',
     to:   '            <tr><th class="group-th" colspan="4">Results',
     suite: 'test_report_ui.js'
+  },
+
+  /* Chapter 12A. The dangerous one is the key: the chapter is called 12A, but
+   * 'ch12' already means Chapters 01 & 02 in session codes sitting in the
+   * Sheet, so the two must never be run together. */
+  {
+    what: "Chapter 12A takes the 'ch12' key, so old session codes serve the wrong paper",
+    from: "  ch12: { label: 'Chapters 01 & 02', sets: () => window.QUESTION_BANK_SETS || {} },",
+    to:   "  ch12: { label: 'Chapter 12A', sets: () => window.QUESTION_BANK_SETS_CH12A || {} },",
+    suite: 'test_ch12a.js'
+  },
+  {
+    what: 'Chapter 12A is registered but its papers come from another chapter',
+    from: "  ch12a: { label: 'Chapter 12A', sets: () => window.QUESTION_BANK_SETS_CH12A || {} }",
+    to:   "  ch12a: { label: 'Chapter 12A', sets: () => window.QUESTION_BANK_SETS_CH03 || {} }",
+    suite: 'test_ch12a.js'
+  },
+  {
+    what: 'segment names lose their bar, so DE reads as D times E',
+    from: "  s = s.replace(/\\\\overline\\{([^{}]*)\\}/g, '<span class=\"overline\">$1</span>');",
+    to:   "  ;",
+    suite: 'test_ch12a.js'
+  },
+  {
+    what: "Heron's formula loses its root sign",
+    from: "  s = replaceSqrt(s);",
+    to:   "  ;",
+    suite: 'test_ch12a.js'
+  },
+  {
+    what: 'the radicand is closed at the first brace rather than the matching one',
+    from: "      if (s[j] === '{') depth++;\n      else if (s[j] === '}') depth--;",
+    to:   "      if (s[j] === '}') depth--;",
+    suite: 'test_ch12a.js'
+  },
+
+  /* Chapter 04. It never carried the historical 'ch12' key confusion Chapter
+   * 12A did, but the same "registered under its own name, papers come from
+   * somewhere else" mistake is just as possible to make by hand. */
+  {
+    what: 'Chapter 04 is registered but its papers come from another chapter',
+    from: "  ch04: { label: 'Chapter 04', sets: () => window.QUESTION_BANK_SETS_CH04 || {} }",
+    to:   "  ch04: { label: 'Chapter 04', sets: () => window.QUESTION_BANK_SETS_CH12A || {} }",
+    suite: 'test_ch04.js'
   }
 ];
 
@@ -511,14 +643,14 @@ const WS_MUTANTS = [
   },
   {
     what: 'an image keeps its folder, which is not where the bundle puts it',
-    from: "    const file = String(d.src).replace(/^.*\\//, '');",
-    to:   "    const file = String(d.src);",
+    from: "    const file = worksheetImageSrc(d.src).replace(/^.*\\//, '');",
+    to:   "    const file = worksheetImageSrc(d.src);",
     suite: 'test_worksheet.js'
   },
   {
     what: 'the same image is bundled once per question that uses it',
-    from: "      if (out.indexOf(q.diagram.src) === -1) out.push(q.diagram.src);",
-    to:   "      out.push(q.diagram.src);",
+    from: "      if (out.indexOf(src) === -1) out.push(src);",
+    to:   "      out.push(src);",
     suite: 'test_worksheet.js'
   },
   {
@@ -593,6 +725,34 @@ const WS_MUTANTS = [
     what: 'Clear all goes back to bare resetForm(), which empties the name too',
     from: "    doc.resetForm(fields);",
     to:   "    doc.resetForm();",
+    suite: 'test_worksheet.js'
+  },
+
+  /* Both of these shipped and came back from the instructor, so both are now
+   * held down. Each one alone empties every drawing out of a Chapter 12A
+   * worksheet or stops the compile outright. */
+  {
+    what: "the worksheet is handed the screen's SVG, which pdflatex cannot read",
+    from: "  return String(src || '').replace(/\\.svg$/i, '.pdf');",
+    to:   "  return String(src || '');",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the picture is bundled as PDF but the document still asks for the SVG',
+    from: "    const file = worksheetImageSrc(d.src).replace(/^.*\\//, '');",
+    to:   "    const file = String(d.src).replace(/^.*\\//, '');",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the angle sign is left undeclared, so every geometry question stops the compile',
+    from: "\\DeclareUnicodeCharacter{2220}{\\ensuremath{\\angle}}",
+    to:   "%",
+    suite: 'test_worksheet.js'
+  },
+  {
+    what: 'the parallel sign is left undeclared',
+    from: "\\DeclareUnicodeCharacter{2225}{\\ensuremath{\\parallel}}",
+    to:   "%",
     suite: 'test_worksheet.js'
   }
 ];
@@ -669,7 +829,7 @@ try {
 
 let caught = 0, survived = [];
 console.log('baseline:');
-for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js', 'test_exam_view.js', 'test_exam_confirm.js', 'test_report.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js']) {
+for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js', 'test_exam_view.js', 'test_exam_confirm.js', 'test_report.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js', 'test_password_reset.js', 'test_password_reset_ui.js']) {
   try {
     execFileSync('node', ['/tmp/energytech_app/' + suite], { stdio: 'pipe' });
     console.log(`  clean   ${suite}`);
