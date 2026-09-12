@@ -14,6 +14,7 @@ const CODE = ROOT + '/google_apps_script/Code.gs';
 const APP = ROOT + '/app.js';
 const WS = ROOT + '/worksheet_tex.js';
 const SW = ROOT + '/service-worker.js';
+const CSS = ROOT + '/style.css';
 
 /* A mutation is a temporary edit to a REAL source file, and the process holding
  * that edit can die in ways no handler catches. The signal handlers further
@@ -51,7 +52,7 @@ recoverFromEarlierRun();          // before the originals are read, or a leftove
 
 fs.mkdirSync(SNAP_DIR, { recursive: true });
 const SNAPSHOT = {};
-[CODE, APP, WS, SW].forEach(f => {
+[CODE, APP, WS, SW, CSS].forEach(f => {
   const dest = path.join(SNAP_DIR, path.basename(f));
   fs.copyFileSync(f, dest);
   SNAPSHOT[f] = dest;
@@ -60,6 +61,46 @@ const SNAPSHOT = {};
 const original = fs.readFileSync(CODE, 'utf8');
 
 const MUTANTS = [
+  /* Covering instructors. Everything here is a rule that a page cannot enforce:
+   * an instructor is a normal signed-in caller who can ask the backend
+   * directly, so each of these mutants is the difference between a real
+   * restriction and a decoration. */
+  {
+    what: 'roster_list stops filtering, so any instructor reads every group in the centre',
+    from: "  const admin = auth.instructor.role === 'admin';\n  const mine = {};",
+    to:   "  const admin = true;\n  const mine = {};",
+    suite: 'test_backend.js'
+  },
+  {
+    what: 'trainee_list stops checking the caller covers the group they asked for',
+    from: "    if (!coversGroup_(auth, intake, group)) {\n      return { ok: false, error: 'That group is not assigned to you.' };\n    }",
+    to:   "    if (false) {\n      return { ok: false, error: 'That group is not assigned to you.' };\n    }",
+    suite: 'test_backend.js'
+  },
+  {
+    what: 'an instructor may reset the password of any trainee, not only their own',
+    from: "  if (!coversGroup_(auth, found.row[3], found.row[4])) {",
+    to:   "  if (false) {",
+    suite: 'test_backend.js'
+  },
+  {
+    what: 'assigning groups stops being admin-only, so an instructor assigns themselves any group',
+    from: "function adminSetInstructorGroups_(params) {\n  const auth = requireAdmin_(params);",
+    to:   "function adminSetInstructorGroups_(params) {\n  const auth = requireAuth_(params);",
+    suite: 'test_backend.js'
+  },
+  {
+    what: 'a group that does not exist can be assigned, granting nothing while looking granted',
+    from: "  if (unknown.length) {",
+    to:   "  if (false) {",
+    suite: 'test_backend.js'
+  },
+  {
+    what: 'coversGroup_ says yes to everyone, which is every rule above at once',
+    from: "  if (auth.instructor.role === 'admin') return true;\n  const want = normLabel_(intake)",
+    to:   "  if (true) return true;\n  const want = normLabel_(intake)",
+    suite: 'test_backend.js'
+  },
   {
     what: 'my_attempt stops checking the attempt belongs to the caller',
     from: "    if (normId_(row[4]) !== me) return false;",
@@ -233,12 +274,11 @@ const MUTANTS = [
     to:   "  ;",
     suite: 'test_password_reset.js'
   },
-  {
-    what: 'any instructor, not only an admin, may reset a trainee\'s password',
-    from: "function adminResetTraineePassword_(params) {\n  const auth = requireAdmin_(params);",
-    to:   "function adminResetTraineePassword_(params) {\n  const auth = requireAuth_(params);",
-    suite: 'test_password_reset.js'
-  },
+  /* This used to be "any instructor, not only an admin, may reset a trainee's
+   * password", patching requireAdmin_ to requireAuth_. That IS the code now:
+   * an assigned instructor may reset their own trainees' passwords. The guard
+   * that replaced it is the coversGroup_ check inside the function, and its
+   * mutant lives with the other covering-instructor ones above. */
   {
     what: 'an admin may reset their own password, signing themselves out mid-action',
     from: "    return { ok: false, error: 'Use Change password to change your own. A reset is for somebody else\\'s account.' };",
@@ -598,6 +638,24 @@ const APP_MUTANTS = [
   /* Chapter 04. It never carried the historical 'ch12' key confusion Chapter
    * 12A did, but the same "registered under its own name, papers come from
    * somewhere else" mistake is just as possible to make by hand. */
+  {
+    what: 'the roster is drawn as editable for everyone, offering an instructor controls that will be refused',
+    from: "function rosterCanEdit() {\n  return rosterViewer ? Boolean(rosterViewer.canEdit) : isAdmin();",
+    to:   "function rosterCanEdit() {\n  return true;",
+    suite: 'test_instructor_roster.js'
+  },
+  {
+    what: "the roster card goes back to being hidden from anyone who is not an admin",
+    from: "  if (intakeSection) intakeSection.hidden = false;",
+    to:   "  if (intakeSection) intakeSection.hidden = !isAdmin();",
+    suite: 'test_instructor_roster.js'
+  },
+  {
+    what: 'the search index is built with one unscoped call again, which the backend refuses',
+    from: "    if (rosterCanEdit()) {\n      const data = await rosterCall('trainee_list', { token: authToken }, 'energytechTraineeAll');",
+    to:   "    if (true) {\n      const data = await rosterCall('trainee_list', { token: authToken }, 'energytechTraineeAll');",
+    suite: 'test_instructor_roster.js'
+  },
   /* The collapsible instructor cards. The first of these is the one worth
    * holding down: lifting every heading to the top of its card looks tidier
    * and quietly breaks "My sessions", whose heading lives inside a container
@@ -814,6 +872,21 @@ const WS_APP_MUTANTS = [
  * drives the page over a live server, where a dead service worker looks
  * exactly like a working one. test_appshell.js registers it for real. */
 const swOriginal = fs.readFileSync(SW, 'utf8');
+
+/* Stylesheet mutants. Only worth having where the LAYOUT is the bug -- here,
+ * a row-actions cell that collapsed to nothing and let its buttons sit on top
+ * of the account badge. A test that measures geometry is the only kind that
+ * notices, so this proves the measurement is real. */
+const cssOriginal = fs.readFileSync(CSS, 'utf8');
+const CSS_MUTANTS = [
+  {
+    what: 'the row actions column collapses over the account badge again',
+    from: ".roster-table .row-actions { display: flex; gap: 4px; justify-content: flex-end; min-width: max-content; }",
+    to:   ".roster-table .row-actions { display: flex; gap: 4px; justify-content: flex-end; }",
+    suite: 'test_instructor_roster.js'
+  }
+];
+
 const SW_MUTANTS = [
   {
     what: 'the precache list loses a comma, so the worker does not parse and never registers',
@@ -856,10 +929,10 @@ try {
  * reported as SKIPPED two hundred lines into the output where it reads like a
  * footnote. */
 {
-  const sources = { [CODE]: original, [APP]: appOriginal, [WS]: wsOriginal, [SW]: swOriginal };
+  const sources = { [CODE]: original, [APP]: appOriginal, [WS]: wsOriginal, [SW]: swOriginal, [CSS]: cssOriginal };
   const missing = [];
   [[MUTANTS, CODE], [APP_MUTANTS, APP], [WS_MUTANTS, WS], [WS_APP_MUTANTS, APP],
-   [SW_MUTANTS, SW]]
+   [SW_MUTANTS, SW], [CSS_MUTANTS, CSS]]
     .forEach(([list, file]) => list.forEach(m => {
       if (!sources[file].includes(m.from)) missing.push(`${path.basename(file)}: ${m.what}`);
     }));
@@ -944,9 +1017,10 @@ runMutants(APP_MUTANTS, APP, appOriginal);
 runMutants(WS_MUTANTS, WS, wsOriginal);
 runMutants(WS_APP_MUTANTS, APP, appOriginal);
 runMutants(SW_MUTANTS, SW, swOriginal);
+runMutants(CSS_MUTANTS, CSS, cssOriginal);
 
 const total = MUTANTS.length + APP_MUTANTS.length + WS_MUTANTS.length + WS_APP_MUTANTS.length
-            + SW_MUTANTS.length;
+            + SW_MUTANTS.length + CSS_MUTANTS.length;
 console.log(`\n${caught} of ${total} broken guards were caught by the tests.`);
 if (survived.length) {
   console.log('\nNOT ACTUALLY TESTED:');

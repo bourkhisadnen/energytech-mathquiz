@@ -261,5 +261,107 @@ console.log('\n=== 13. ensureHeaders_ upgrades an old sheet in place ===');
     'the three roster sheets were created');
 }
 
+/* --------------------------------------------------------------------------
+ * Covering instructors. An admin owns the roster; an instructor sees only the
+ * groups assigned to them, and the filtering has to happen HERE -- the
+ * instructor is a normal signed-in caller who can ask the backend directly, so
+ * a rule enforced only by hiding rows in the page is not a rule at all.
+ * ----------------------------------------------------------------------- */
+console.log('\n=== 14. What an instructor may see and do ===');
+{
+  // A roster to be covered: two groups in one intake, one trainee in each,
+  // both with accounts so a password reset is a meaningful thing to attempt.
+  get(api, 'group_save', { token: ADMIN, intake: 'JAN26', name: 'G5' });
+  get(api, 'group_save', { token: ADMIN, intake: 'JAN26', name: 'G6' });
+  get(api, 'intake_save', { token: ADMIN, label: 'MAR26' });
+  get(api, 'group_save', { token: ADMIN, intake: 'MAR26', name: 'G7' });
+  get(api, 'trainee_save', { token: ADMIN, energytechId: 'ET7001', name: 'Ali A', intake: 'JAN26', group: 'G5' });
+  get(api, 'trainee_save', { token: ADMIN, energytechId: 'ET7002', name: 'Badr B', intake: 'JAN26', group: 'G6' });
+  get(api, 'trainee_signup', { energytechId: 'ET7001', password: 'traineepass1' });
+  get(api, 'trainee_signup', { energytechId: 'ET7002', password: 'traineepass2' });
+
+  console.log('  -- an instructor with nothing assigned --');
+  let v = get(api, 'roster_list', { token: INSTR });
+  ok(v.ok, 'may still call roster_list -- it is their own roster card asking');
+  eq(v.intakes.length, 0, 'but is shown no intakes');
+  eq(v.groups.length, 0, 'and no groups');
+  eq(v.viewer.canEdit, false, 'and is told the roster is not theirs to edit');
+  v = get(api, 'trainee_list', { token: INSTR, intake: 'JAN26', group: 'G5' });
+  ok(!v.ok, 'and asking for a group directly is refused: ' + JSON.stringify(v.error));
+  v = get(api, 'trainee_list', { token: INSTR });
+  ok(!v.ok, 'as is asking for every trainee at once, which used to return the whole centre');
+
+  console.log('  -- the admin assigns one group --');
+  r = get(api, 'admin_set_instructor_groups', { token: INSTR, username: 'sara', groups: 'JAN26/G5' });
+  ok(!r.ok, 'an instructor cannot assign groups, not even to themselves');
+  r = get(api, 'admin_set_instructor_groups', { token: ADMIN, username: 'sara', groups: 'JAN26/NOPE' });
+  ok(!r.ok, 'assigning a group that does not exist is refused rather than stored: ' + JSON.stringify(r.error));
+  r = get(api, 'admin_set_instructor_groups', { token: ADMIN, username: 'adnen', groups: 'JAN26/G5' });
+  ok(!r.ok, 'an admin is not assigned groups; they already see everything');
+  r = get(api, 'admin_set_instructor_groups', { token: ADMIN, username: 'sara', groups: 'JAN26/G5' });
+  ok(r.ok, 'the admin assigns JAN26/G5 to sara');
+
+  console.log('  -- what she sees now --');
+  v = get(api, 'roster_list', { token: INSTR });
+  eq(v.groups.map(g => g.intake + '/' + g.name), ['JAN26/G5'], 'exactly the one group she covers');
+  eq(v.intakes.map(i => i.label), ['JAN26'], 'and only the intake it sits in -- not MAR26, which she has nothing in');
+  eq(v.viewer.assignedGroups, [{ intake: 'JAN26', group: 'G5' }], 'the page is told what she covers');
+  v = get(api, 'trainee_list', { token: INSTR, intake: 'JAN26', group: 'G5' });
+  ok(v.ok && v.trainees.length === 1 && v.trainees[0].energytechId === 'ET7001', 'she can list her own group');
+  v = get(api, 'trainee_list', { token: INSTR, intake: 'JAN26', group: 'G6' });
+  ok(!v.ok, 'the group next door is still refused');
+  v = get(api, 'roster_list', { token: ADMIN });
+  ok(v.groups.length >= 3 && v.viewer.canEdit === true, 'while the admin still sees every group, and may edit');
+
+  console.log('  -- what she may change --');
+  r = get(api, 'intake_save', { token: INSTR, label: 'APR26' });
+  ok(!r.ok, 'she cannot create an intake');
+  r = get(api, 'group_save', { token: INSTR, intake: 'JAN26', name: 'G8' });
+  ok(!r.ok, 'nor a group');
+  r = get(api, 'trainee_save', { token: INSTR, energytechId: 'ET7003', name: 'C', intake: 'JAN26', group: 'G5' });
+  ok(!r.ok, 'nor a trainee, not even in the group she covers');
+  r = get(api, 'trainee_delete', { token: INSTR, energytechId: 'ET7001' });
+  ok(!r.ok, 'nor delete one');
+  r = get(api, 'trainee_move', { token: INSTR, energytechId: 'ET7001', intake: 'JAN26', group: 'G6' });
+  ok(!r.ok, 'nor move one out of her group');
+
+  console.log('  -- the one write she may make --');
+  r = get(api, 'admin_reset_trainee_password', { token: INSTR, energytechId: 'ET7001' });
+  ok(r.ok && r.temporaryPassword, 'she can reset a password for a trainee she covers');
+  const temp = r.temporaryPassword;
+  r = get(api, 'admin_reset_trainee_password', { token: INSTR, energytechId: 'ET7002' });
+  ok(!r.ok, 'but not for the group next door: ' + JSON.stringify(r.error));
+  r = get(api, 'admin_reset_trainee_password', { token: ADMIN, energytechId: 'ET7002' });
+  ok(r.ok, 'the admin still can, for anyone');
+  // The reset must really work, not merely be permitted.
+  r = get(api, 'trainee_login', { energytechId: 'ET7001', password: temp });
+  ok(r.ok && r.mustChangePassword, 'the temporary password works and demands a new one');
+
+  console.log('  -- history stays scoped to sessions she set --');
+  // Chosen policy: a covering instructor sees the trainee's attempts on HER
+  // papers, not on the regular teacher's. That was already the rule; this
+  // pins it so widening the roster did not quietly widen this too.
+  v = get(api, 'trainee_history', { token: INSTR, energytechId: 'ET7001' });
+  ok(v.ok, 'she can open a trainee history');
+  ok((v.attempts || []).every(a => normUser(a.ownerUsername) === 'sara' || !a.ownerUsername),
+    'and it holds nothing set by another instructor');
+
+  console.log('  -- unassigning --');
+  r = get(api, 'admin_set_instructor_groups', { token: ADMIN, username: 'sara', groups: '' });
+  ok(r.ok, 'the admin can take the group back');
+  v = get(api, 'roster_list', { token: INSTR });
+  eq(v.groups.length, 0, 'and she is back to seeing nothing');
+  r = get(api, 'admin_reset_trainee_password', { token: INSTR, energytechId: 'ET7001' });
+  ok(!r.ok, 'including no longer being able to reset that trainee');
+
+  console.log('  -- the admin can see who covers what --');
+  const list = get(api, 'admin_list_instructors', { token: ADMIN });
+  const sara = (list.instructors || []).find(i => i.username === 'sara');
+  ok(sara && Array.isArray(sara.assignedGroups), 'admin_list_instructors reports each instructor\'s groups');
+  eq(sara.assignedGroups, [], 'sara\'s list is empty again');
+}
+
+function normUser(u) { return String(u || '').trim().toLowerCase(); }
+
 console.log(`\n${checks - failures.length}/${checks} checks passed`);
 if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }

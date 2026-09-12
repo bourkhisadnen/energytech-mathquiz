@@ -181,6 +181,8 @@ function doGet(e) {
       data = adminSetStatus_(params);
     } else if (params.action === 'admin_set_role') {
       data = adminSetRole_(params);
+    } else if (params.action === 'admin_set_instructor_groups') {
+      data = adminSetInstructorGroups_(params);
     } else if (params.action === 'admin_reset_instructor_password') {
       data = adminResetInstructorPassword_(params);
     } else if (params.action === 'admin_reset_trainee_password') {
@@ -276,8 +278,60 @@ function makeToken_() {
 const INSTRUCTOR_HEADERS = [
   'Timestamp', 'Username', 'Display Name', 'Password Hash', 'Salt',
   'Role', 'Status', 'Requested At', 'Approved By', 'Approved At',
-  'Token', 'Token Expires', 'Must Change Password'
+  'Token', 'Token Expires', 'Must Change Password', 'Assigned Groups'
 ];
+/* Column 14 holds the groups a non-admin instructor covers, as "INTAKE/GROUP"
+ * separated by semicolons -- "JAN26/G1;JAN26/G3". A column rather than a sheet
+ * of its own: ensureHeaders_ appends it to a spreadsheet deployed before this
+ * version without touching a single existing row, which is how every other
+ * column this project has added arrived. Admins are never assigned groups;
+ * they see everything, and coversGroup_ says so before it looks at the cell. */
+const COL_ASSIGNED_GROUPS = 14;
+
+/* "JAN26/G1;JAN26/G3" <-> [{intake, group}], normalised so that comparing an
+ * assignment against a roster row does not turn on spacing or case. */
+function parseAssignedGroups_(cell) {
+  return String(cell || '').split(';')
+    .map(function (part) {
+      const bits = part.split('/');
+      return { intake: normLabel_(bits[0]), group: normLabel_(bits.slice(1).join('/')) };
+    })
+    .filter(function (g) { return g.intake && g.group; });
+}
+
+function serializeAssignedGroups_(list) {
+  const seen = {};
+  return (list || [])
+    .map(function (g) { return normLabel_(g.intake) + '/' + normLabel_(g.group); })
+    .filter(function (key) {
+      if (!/^[^/]+\/.+$/.test(key) || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    })
+    .join(';');
+}
+
+function assignedGroupsForRow_(row) {
+  return parseAssignedGroups_(row[COL_ASSIGNED_GROUPS - 1]);
+}
+
+/* The single question the whole feature turns on: may this caller see this
+ * group? Admins always may. Everyone else may only if it is on their list. */
+function coversGroup_(auth, intake, group) {
+  if (auth.instructor.role === 'admin') return true;
+  const want = normLabel_(intake) + '/' + normLabel_(group);
+  return assignedGroupsFor_(auth.instructor.username).some(function (g) {
+    return g.intake + '/' + g.group === want;
+  });
+}
+
+function assignedGroupsFor_(username) {
+  const want = normalizeUsername_(username);
+  const found = findInstructorRow_(getOrCreateInstructorsSheet_(), function (row) {
+    return normalizeUsername_(row[1]) === want;
+  });
+  return found ? assignedGroupsForRow_(found.row) : [];
+}
 
 function getOrCreateInstructorsSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -356,6 +410,7 @@ function findInstructorRow_(sheet, predicate) {
 
 function instructorPublicInfo_(row) {
   return {
+    assignedGroups: assignedGroupsForRow_(row),
     username: String(row[1] || ''),
     displayName: String(row[2] || ''),
     role: String(row[5] || 'instructor'),
@@ -538,6 +593,45 @@ function adminSetRole_(params) {
   return { ok: true, username: target, role };
 }
 
+/* Which groups a non-admin instructor covers. Sent as "JAN26/G1;JAN26/G3"
+ * because every call here is JSONP, so a parameter is a string or nothing.
+ *
+ * Only an admin may call this, and the list is checked against the groups that
+ * actually exist -- an assignment to a group that was renamed or deleted would
+ * otherwise sit in the sheet silently granting nothing, and look to the admin
+ * like the instructor had been given access. */
+function adminSetInstructorGroups_(params) {
+  const auth = requireAdmin_(params);
+  if (!auth.ok) return auth;
+
+  const target = normalizeUsername_(params.username);
+  if (!target) return { ok: false, error: 'Name the instructor.' };
+
+  const sheet = getOrCreateInstructorsSheet_();
+  const found = findInstructorRow_(sheet, function (row) {
+    return normalizeUsername_(row[1]) === target;
+  });
+  if (!found) return { ok: false, error: 'Instructor not found.' };
+  if (String(found.row[5]) === 'admin') {
+    return { ok: false, error: 'Admins already see every group, so they are not assigned any.' };
+  }
+
+  const wanted = parseAssignedGroups_(params.groups);
+  const real = {};
+  rowsOf_(groupsSheet_()).forEach(function (r) {
+    if (r[1] && r[2]) real[normLabel_(r[1]) + '/' + normLabel_(r[2])] = true;
+  });
+  const unknown = wanted.filter(function (g) { return !real[g.intake + '/' + g.group]; });
+  if (unknown.length) {
+    return { ok: false, error: 'No such group: ' + unknown.map(function (g) {
+      return g.intake + '/' + g.group;
+    }).join(', ') };
+  }
+
+  sheet.getRange(found.rowNumber, COL_ASSIGNED_GROUPS).setValue(serializeAssignedGroups_(wanted));
+  return { ok: true, username: target, assignedGroups: wanted };
+}
+
 /* ------------------------- forgotten passwords ----------------------------
  *
  * There is no email anywhere in this app, so a reset is something a person does
@@ -582,8 +676,16 @@ function adminResetInstructorPassword_(params) {
            displayName: String(found.row[2] || target) };
 }
 
+/* Resetting a trainee's password is the one write a non-admin instructor may
+ * make, and only for a trainee in a group assigned to them. It is deliberately
+ * not requireAdmin_: a trainee who has forgotten their password is standing in
+ * front of whoever is teaching them that morning, and sending them to find an
+ * admin is the reason this reset exists in the first place.
+ *
+ * The action keeps its admin_ name so that session codes, saved links and the
+ * front end carry on working; the guard below is what decides, not the name. */
 function adminResetTraineePassword_(params) {
-  const auth = requireAdmin_(params);
+  const auth = requireAuth_(params);
   if (!auth.ok) return auth;
 
   const id = normId_(params.energytechId);
@@ -592,6 +694,16 @@ function adminResetTraineePassword_(params) {
   const sheet = traineesSheet_();
   const found = findTraineeRow_(sheet, id);
   if (!found) return { ok: false, error: 'Trainee ' + id + ' is not on the roster.' };
+
+  // Necessarily checked after the row is found, since the row is what says
+  // which group the trainee is in. An instructor can therefore tell "no such
+  // id" from "not your trainee", which is the right trade here: the people
+  // holding accounts are colleagues in one centre, and a mistyped id that
+  // reported "not yours" would send them hunting for a permission problem
+  // that does not exist.
+  if (!coversGroup_(auth, found.row[3], found.row[4])) {
+    return { ok: false, error: 'That trainee is not in a group assigned to you.' };
+  }
 
   // Only an account that exists can have its password reset. The other two
   // states have their own remedy, and saying so is more use than a temporary
@@ -844,17 +956,38 @@ function rowsOf_(sheet) {
 /* ---------------- read ---------------- */
 
 function rosterList_(params) {
-  const auth = requireAuth_(params);              // any signed-in instructor may read
+  const auth = requireAuth_(params);
   if (!auth.ok) return auth;
 
-  const intakes = rowsOf_(intakesSheet_()).map(r => ({
-    label: String(r[1] || ''), status: String(r[2] || 'active'),
-    createdBy: String(r[3] || '')
-  })).filter(i => i.label);
+  /* An admin reads the whole roster. Everyone else reads only the groups they
+   * have been assigned -- filtered HERE, not in the browser. The instructor
+   * view is a normal signed-in caller who could ask for roster_list directly,
+   * so hiding rows in the page would leave the rule looking enforced while
+   * handing every trainee in the centre to anyone with an account. */
+  const admin = auth.instructor.role === 'admin';
+  const mine = {};
+  if (!admin) {
+    assignedGroupsFor_(auth.instructor.username).forEach(function (g) {
+      mine[g.intake + '/' + g.group] = true;
+    });
+  }
+  const visible = function (intake, group) {
+    return admin || mine[normLabel_(intake) + '/' + normLabel_(group)] === true;
+  };
 
   const groups = rowsOf_(groupsSheet_()).map(r => ({
     intake: String(r[1] || ''), name: String(r[2] || '')
-  })).filter(g => g.intake && g.name);
+  })).filter(g => g.intake && g.name).filter(g => visible(g.intake, g.name));
+
+  // An intake is worth listing only if the caller can see a group inside it;
+  // otherwise an instructor covering one group of one intake would be shown a
+  // list of every intake the centre has ever run, all of them empty.
+  const intakeHasVisibleGroup = {};
+  groups.forEach(function (g) { intakeHasVisibleGroup[normLabel_(g.intake)] = true; });
+  const intakes = rowsOf_(intakesSheet_()).map(r => ({
+    label: String(r[1] || ''), status: String(r[2] || 'active'),
+    createdBy: String(r[3] || '')
+  })).filter(i => i.label).filter(i => admin || intakeHasVisibleGroup[normLabel_(i.label)]);
 
   const counts = {};
   const accounts = {};
@@ -871,7 +1004,15 @@ function rosterList_(params) {
       trainees: counts[g.intake + '|' + g.name] || 0,
       withAccount: accounts[g.intake + '|' + g.name] || 0
     })),
-    viewer: { username: auth.instructor.username, role: auth.instructor.role }
+    // canEdit tells the page whether to offer the controls at all. It is a
+    // convenience for the UI, never the thing that enforces anything -- every
+    // write route asks requireAdmin_ for itself.
+    viewer: {
+      username: auth.instructor.username,
+      role: auth.instructor.role,
+      canEdit: admin,
+      assignedGroups: admin ? null : assignedGroupsFor_(auth.instructor.username)
+    }
   };
 }
 
@@ -880,6 +1021,23 @@ function traineeList_(params) {
   if (!auth.ok) return auth;
   const intake = normLabel_(params.intake);
   const group = normLabel_(params.group);
+
+  /* Same rule as rosterList_, and for the same reason: without it, asking for
+   * the whole trainee list with no intake or group would return the entire
+   * centre to anyone with an account.
+   *
+   * coversGroup_ is the guard. The first line only turns an unscoped request
+   * into a clearer message than "that group is not assigned to you" -- an
+   * empty intake/group can never match an assignment, so removing it changes
+   * the wording and nothing else. (Confirmed: a mutant that deletes it
+   * survives, which is why there is no mutant for it.) */
+  if (auth.instructor.role !== 'admin') {
+    if (!intake || !group) return { ok: false, error: 'Name the intake and group.' };
+    if (!coversGroup_(auth, intake, group)) {
+      return { ok: false, error: 'That group is not assigned to you.' };
+    }
+  }
+
   const out = [];
   rowsOf_(traineesSheet_()).forEach(r => {
     if (intake && normLabel_(r[3]) !== intake) return;

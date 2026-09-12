@@ -1,4 +1,4 @@
-const CACHE_NAME = 'energytech-quiz-app-v58-instructor-cards';
+const CACHE_NAME = 'energytech-quiz-app-v59-covering-instructors';
 const FILES = [
   './',
   './index.html',

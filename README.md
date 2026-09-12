@@ -250,6 +250,57 @@ Trainees cannot submit until every question is answered.
 
 If a trainee tries to submit too early, the app lists the unanswered questions and highlights them.
 
+## Who may do what: admins, instructors, and cover
+
+The roster — intakes, groups and trainees — belongs to **admins**. Only an admin
+can create, rename, move or delete any of it.
+
+An admin can also **assign groups to an instructor**, which is how cover works
+when one teacher takes another's class. Do it from **Instructor accounts
+(admin)**: each instructor row has a *Covers* column and a **Change** button,
+and the editor lists every group in the centre to tick. Admins are not assigned
+groups — they already see all of them.
+
+An instructor who has been assigned groups sees the same
+**Intakes, groups and trainees** card an admin sees, holding only their groups.
+In it they may:
+
+| | |
+|---|---|
+| ✓ | see their intakes, groups and trainees |
+| ✓ | reset a trainee's password (the one write they have — a trainee who forgot theirs is standing in front of whoever is teaching that morning) |
+| ✓ | click a name to open that trainee's record |
+| ✗ | add, edit, move or delete anything |
+| ✗ | see any group not assigned to them |
+
+Two things are deliberately **not** widened by an assignment:
+
+- **Results.** The dashboard and *My sessions* still show only sessions that
+  instructor created. Cover does not hand over another teacher's results.
+- **A trainee's history.** Opening a trainee's record shows their attempts on
+  **that instructor's own sessions**, not on papers set by anyone else. A
+  covering instructor stepping in fresh will therefore see an empty record
+  until they set their own paper — which is the intended reading of "their
+  history", not an error.
+
+### It is enforced in the backend, not the page
+
+`roster_list` and `trainee_list` filter to the caller's assigned groups inside
+`Code.gs`, and the trainee password reset checks the trainee's group before it
+does anything. This matters: an instructor is a signed-in caller who can ask
+the backend directly, so a rule enforced only by hiding rows in the browser
+would not be a rule. `test_backend.js` §14 exercises all of it against the real
+`Code.gs`; `test_instructor_roster.js` covers what the page draws.
+
+### The Assigned Groups column
+
+Assignments live in a new **Assigned Groups** column on the `Instructors`
+sheet, as `JAN26/G1;JAN26/G3`. It is appended to an existing spreadsheet
+automatically, without touching any row — the same migration every other added
+column in this project has used. **This build changes `Code.gs`, so the Apps
+Script has to be redeployed** for any of the above to work; until then the app
+behaves as it did before.
+
 ## Instructor accounts
 
 Instructor Mode is now protected by real accounts instead of a single shared password, so colleagues can use the same app with their own login.

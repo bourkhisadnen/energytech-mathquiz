@@ -403,16 +403,28 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
   ok(groupOpts.join('|').includes(`G1 (${g1Count})`),
     `the group picker shows live trainee counts (wanted G1 (${g1Count}), got ${groupOpts.join(' ')})`);
 
-  console.log('\n=== 13. A plain instructor gets the pickers but not the editor ===');
+  console.log('\n=== 13. A plain instructor gets the pickers, and a read-only roster ===');
+  // This used to assert the roster card was HIDDEN from a non-admin. It is now
+  // shown, filtered by the backend to the groups assigned to that instructor,
+  // because a covering teacher needs to see their trainees and reset a
+  // forgotten password. What they still cannot do is change anything, which is
+  // what the checks below hold -- test_instructor_roster.js covers the rest.
   const p2 = await browser.newPage();
   const e2 = [];
   p2.on('pageerror', e => e2.push(String(e)));
   await mount(p2, db);
   await p2.goto(BASE);
   await login(p2, 'sara', 'pw');
-  ok(await p2.isHidden('#intakePanelSection'), 'intake editor hidden from a plain instructor');
+  ok(await p2.isVisible('#intakePanelSection'), 'the roster card is shown to a plain instructor');
+  await p2.waitForTimeout(400);
+  const editable = await p2.evaluate(() => ({
+    add: !document.getElementById('showAddIntake').hidden,
+    readonlyClass: document.getElementById('intakePanelSection').classList.contains('is-readonly')
+  }));
+  ok(!editable.add, 'but nothing that creates an intake');
+  ok(editable.readonlyClass, 'and the card knows it is read-only');
   await p2.waitForFunction(() => document.querySelector('#sessionIntake').options.length === 2);
-  ok(true, 'but the intake picker is still filled');
+  ok(true, 'and the intake picker is still filled');
   ok(e2.length === 0, 'no page errors on the instructor page');
   await p2.close();
 

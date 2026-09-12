@@ -64,6 +64,31 @@ main { width: min(1180px, calc(100% - 24px)); margin: 18px auto 36px; }
 }
 h2 { margin: 0 0 14px; color: var(--blue); font-size: 1.15rem; }
 
+/* ---- who covers which groups ---- */
+.covers-chip {
+  display: inline-block;
+  background: var(--light);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 9px;
+  margin: 1px 0;
+  font-size: .82rem;
+  white-space: nowrap;
+}
+.hint-inline { color: var(--muted); font-size: .85rem; }
+.covers-grid { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0 12px; }
+.covers-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 12px 10px;
+  margin: 0;
+  min-width: 140px;
+}
+.covers-group legend { font-weight: 700; color: var(--blue); padding: 0 4px; font-size: .9rem; }
+.covers-option { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-weight: 500; }
+.covers-option input { margin: 0; }
+.groups-editor-row > td { background: var(--light); }
+
 /* ---- collapsible instructor cards ---- */
 /* The heading row: title on the left, fold triangle on the right. The whole
    row is clickable, so it gets the pointer cursor rather than just the
@@ -887,7 +912,12 @@ a.list-pill {
 .roster-table td, .roster-table th { vertical-align: middle; }
 .roster-table td.pick, .roster-table th.pick { width: 30px; padding-right: 0; }
 .roster-table .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .86rem; }
-.roster-table .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+/* The actions column is meant to shrink to its buttons, which `width: 1%` on
+   the last cell (above) normally achieves. Making the cell a flex container
+   defeats that: it takes the 1% literally and its buttons spill leftwards over
+   the Account badge. Long-standing, and only obvious once a group had trainees
+   in it. max-content is what "as wide as the buttons" actually means. */
+.roster-table .row-actions { display: flex; gap: 4px; justify-content: flex-end; min-width: max-content; }
 .roster-table .where { font-size: .84rem; color: var(--muted); white-space: nowrap; }
 .trainee-edit-row td { background: #fbfdff; }
 

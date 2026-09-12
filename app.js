@@ -2013,7 +2013,12 @@ function renderInstructorAccountBar() {
     el.innerHTML = `Logged in as <strong>${escapeHtml(authUser.displayName)}</strong> (${escapeHtml(authUser.username)})${authUser.role === 'admin' ? ' <span class="mode-pill">ADMIN</span>' : ''}`;
   }
   if (adminSection) adminSection.hidden = !isAdmin();
-  if (intakeSection) intakeSection.hidden = !isAdmin();
+  // The roster is shown to every instructor now, not only admins: a covering
+  // instructor needs to see the groups assigned to them, reset a trainee's
+  // password and open a trainee's record. What they may CHANGE is a separate
+  // question, answered by rosterCanEdit() below and enforced by the backend.
+  if (intakeSection) intakeSection.hidden = false;
+  applyRosterPermissions();
   // Every instructor picks an intake and group when creating a session, so the
   // roster is loaded for all of them -- the admin-only part is editing it.
   if (typeof loadRosterForSessionPickers === 'function') loadRosterForSessionPickers();
@@ -2182,10 +2187,83 @@ async function loadInstructorAccounts() {
       if (out) out.innerHTML = `<p class="hint">${escapeHtml((data && data.error) || 'Could not load accounts.')}</p>`;
       return;
     }
-    renderInstructorAccounts(data.instructors || []);
+    lastInstructorList = data.instructors || [];
+    renderInstructorAccounts(lastInstructorList);
   } catch (err) {
     if (out) out.innerHTML = `<p class="hint">${escapeHtml(err.message || String(err))}</p>`;
   }
+}
+
+// Held so the group editor can open and close without re-fetching the list.
+let lastInstructorList = null;
+
+/* Which groups an instructor covers, and the editor for changing it.
+ *
+ * Assignment is per instructor rather than per group: an admin handing a
+ * colleague cover for the week thinks "Sara is taking my groups", not "this
+ * group needs an owner". Admins are never assigned anything -- they see every
+ * group already, and the backend refuses to assign one.
+ */
+let editingGroupsFor = '';
+
+function coversCell(i) {
+  if (i.role === 'admin') return '<span class="hint-inline">every group</span>';
+  if (i.status !== 'approved') return '<span class="hint-inline">&mdash;</span>';
+  const list = i.assignedGroups || [];
+  if (!list.length) return '<span class="hint-inline">no groups yet</span>';
+  return list.map(g => `<span class="covers-chip">${escapeHtml(g.intake)}/${escapeHtml(g.group)}</span>`).join(' ');
+}
+
+function groupsEditorRow(i) {
+  const all = (rosterCache && rosterCache.groups) || [];
+  const mine = new Set((i.assignedGroups || []).map(g => `${g.intake}/${g.group}`));
+  if (!all.length) {
+    return `<tr class="groups-editor-row"><td colspan="6">
+      <p class="hint">No groups exist yet. Create an intake and a group first, in
+      <strong>Intakes, groups and trainees</strong>.</p>
+      <div class="pane-form-actions"><button type="button" class="secondary cancel-groups">Close</button></div>
+    </td></tr>`;
+  }
+  const byIntake = {};
+  all.forEach(g => { (byIntake[g.intake] = byIntake[g.intake] || []).push(g); });
+  const blocks = Object.keys(byIntake).map(intake => `
+    <fieldset class="covers-group">
+      <legend>${escapeHtml(intake)}</legend>
+      ${byIntake[intake].map(g => {
+        const key = `${g.intake}/${g.name}`;
+        return `<label class="covers-option"><input type="checkbox" class="covers-box" value="${escapeHtml(key)}"${mine.has(key) ? ' checked' : ''} /> ${escapeHtml(g.name)} <span class="hint-inline">(${g.trainees})</span></label>`;
+      }).join('')}
+    </fieldset>`).join('');
+  return `<tr class="groups-editor-row"><td colspan="6">
+    <p class="hint">Tick the groups <strong>${escapeHtml(i.displayName || i.username)}</strong> covers.
+    They will see those groups and their trainees, may reset those trainees' passwords, and may
+    open a trainee's record &mdash; but cannot add, edit or delete anything.</p>
+    <div class="covers-grid">${blocks}</div>
+    <div class="pane-form-actions">
+      <button type="button" class="save-groups" data-username="${escapeHtml(i.username)}">Save</button>
+      <button type="button" class="secondary cancel-groups">Cancel</button>
+    </div>
+  </td></tr>`;
+}
+
+async function openGroupsEditor(username) {
+  editingGroupsFor = username;
+  // The editor lists every group in the centre, which lives in the roster
+  // cache; an admin who opened the accounts card first would not have it yet.
+  if (!rosterCache || !(rosterCache.groups || []).length) await loadRoster(true);
+  renderInstructorAccounts(lastInstructorList || []);
+}
+
+async function saveGroupsEditor(username) {
+  const boxes = document.querySelectorAll('.groups-editor-row .covers-box:checked');
+  const groups = [...boxes].map(b => b.value).join(';');
+  try {
+    const data = await rosterCall('admin_set_instructor_groups',
+      { token: authToken, username, groups }, 'energytechSetGroups');
+    if (!data.ok) { alert(data.error || 'Could not save.'); return; }
+    editingGroupsFor = '';
+    loadInstructorAccounts();
+  } catch (err) { alert(err.message || String(err)); }
 }
 
 function renderInstructorAccounts(list) {
@@ -2201,6 +2279,10 @@ function renderInstructorAccounts(list) {
       <td>${escapeHtml(i.username)}</td>
       <td><span class="status-badge status-${escapeHtml(i.status)}">${escapeHtml(i.status)}</span></td>
       <td>${escapeHtml(i.role)}</td>
+      <td class="covers-cell">${coversCell(i)}${
+        i.role !== 'admin' && i.status === 'approved'
+          ? ` <button type="button" class="icon-btn account-groups-btn" data-username="${escapeHtml(i.username)}">Change</button>`
+          : ''}</td>
       <td class="account-actions">
         ${i.status !== 'approved' ? `<button type="button" class="secondary account-approve-btn" data-username="${escapeHtml(i.username)}">Approve</button>` : ''}
         ${i.status !== 'rejected' && i.username !== me ? `<button type="button" class="secondary account-reject-btn" data-username="${escapeHtml(i.username)}">${i.status === 'pending' ? 'Reject' : 'Revoke'}</button>` : ''}
@@ -2208,7 +2290,7 @@ function renderInstructorAccounts(list) {
         ${i.role === 'admin' && i.username !== me ? `<button type="button" class="secondary account-demote-btn" data-username="${escapeHtml(i.username)}">Remove admin</button>` : ''}
         ${i.status === 'approved' && i.username !== me ? `<button type="button" class="secondary account-reset-btn" data-username="${escapeHtml(i.username)}" data-name="${escapeHtml(i.displayName || i.username)}">Reset password</button>` : ''}
       </td>
-    </tr>`;
+    </tr>${i.username === editingGroupsFor ? groupsEditorRow(i) : ''}`;
 
   // Nothing in the app can rescue a lone admin who forgets their own password:
   // a reset is always somebody else doing it for you. Said here, where the
@@ -2224,9 +2306,9 @@ function renderInstructorAccounts(list) {
   out.innerHTML = `
     ${loneAdmin}
     <h3>Pending requests${pending.length ? ` (${pending.length})` : ''}</h3>
-    ${tableHtml(['Name','Username','Status','Role','Actions'], pending.map(row), 'No pending requests.')}
+    ${tableHtml(['Name','Username','Status','Role','Covers','Actions'], pending.map(row), 'No pending requests.')}
     <h3>All instructor accounts</h3>
-    ${tableHtml(['Name','Username','Status','Role','Actions'], others.map(row), 'No other accounts yet.')}
+    ${tableHtml(['Name','Username','Status','Role','Covers','Actions'], others.map(row), 'No other accounts yet.')}
   `;
 }
 
@@ -3014,6 +3096,12 @@ function init() {
     if (demoteBtn) { setInstructorRole(demoteBtn.dataset.username, 'instructor'); return; }
     const resetBtn = e.target.closest && e.target.closest('.account-reset-btn');
     if (resetBtn) { resetInstructorPassword(resetBtn.dataset.username, resetBtn.dataset.name); return; }
+    const groupsBtn = e.target.closest && e.target.closest('.account-groups-btn');
+    if (groupsBtn) { openGroupsEditor(groupsBtn.dataset.username); return; }
+    const saveGroups = e.target.closest && e.target.closest('.save-groups');
+    if (saveGroups) { saveGroupsEditor(saveGroups.dataset.username); return; }
+    const cancelGroups = e.target.closest && e.target.closest('.cancel-groups');
+    if (cancelGroups) { editingGroupsFor = ''; renderInstructorAccounts(lastInstructorList || []); return; }
     const copyTemp = e.target.closest && e.target.closest('.copy-temp');
     if (copyTemp) { copyTempPassword(copyTemp); return; }
     const dismissTemp = e.target.closest && e.target.closest('.dismiss-temp');
@@ -3407,6 +3495,45 @@ function rosterFlash(msg, kind) {
   if (kind !== 'bad') flashTimer = setTimeout(() => rosterTopStatus(''), 4000);
 }
 
+/* Who may change the roster, as opposed to read it.
+ *
+ * The answer comes from the backend (roster_list reports viewer.canEdit) and
+ * falls back to the signed-in role before the first load has landed. Either
+ * way this only decides which controls are drawn: every write route checks for
+ * itself, so a page that got this wrong would produce a refusal, not a change. */
+let rosterViewer = null;
+
+function rosterCanEdit() {
+  return rosterViewer ? Boolean(rosterViewer.canEdit) : isAdmin();
+}
+
+/* Show or hide the roster controls an instructor has no business pressing.
+ * The per-row controls are handled where the rows are built; these are the
+ * fixed ones in the page. */
+function applyRosterPermissions() {
+  const panel = $('intakePanelSection');
+  if (!panel) return;
+  const canEdit = rosterCanEdit();
+  panel.classList.toggle('is-readonly', !canEdit);
+  const hint = $('rosterHint');
+  if (hint) {
+    hint.textContent = canEdit
+      ? 'Pick an intake, then a group, to see and edit its trainees. Trainees sign in with the EnergyTech ID listed here.'
+      : 'The groups assigned to you. Click a name to open a trainee\u2019s record, or reset a password for anyone who has forgotten theirs. Only an admin can add or change intakes, groups and trainees.';
+  }
+  ['showAddIntake', 'showAddGroup', 'showAddTrainee', 'importCsvBtn'].forEach(id => {
+    const el = $(id);
+    if (el) el.hidden = !canEdit;
+  });
+  if (!canEdit) {
+    ['addIntakeForm', 'addGroupForm', 'addTraineeForm'].forEach(id => {
+      const el = $(id);
+      if (el) el.hidden = true;
+    });
+    if ($('bulkBar')) $('bulkBar').hidden = true;
+  }
+}
+
 /* ---------------- loading ---------------- */
 
 async function loadRoster(quiet) {
@@ -3415,24 +3542,27 @@ async function loadRoster(quiet) {
   try {
     const data = await rosterCall('roster_list', { token: authToken }, 'energytechRoster', 1);
     if (!data.ok) {
-      if (isAdmin()) rosterTopStatus(escapeHtml(data.error || 'Could not load intakes.'), 'bad');
+      rosterTopStatus(escapeHtml(data.error || 'Could not load intakes.'), 'bad');
       return;
     }
     rosterCache = { intakes: data.intakes || [], groups: data.groups || [] };
+    // The backend filtered this list to what the caller may see, and says in
+    // the same breath whether they may edit it.
+    rosterViewer = data.viewer || null;
+    applyRosterPermissions();
     if (!quiet) rosterTopStatus('');
-    if (isAdmin()) {
-      // Keep the drill-down pointing somewhere real after a rename or delete.
-      if (rosterSel.intake && !rosterCache.intakes.some(i => i.label === rosterSel.intake)) {
-        rosterSel = { intake: '', group: '' };
-      }
-      if (rosterSel.group && !rosterCache.groups.some(g => g.intake === rosterSel.intake && g.name === rosterSel.group)) {
-        rosterSel.group = '';
-      }
-      renderWorkspace();
+    // Keep the drill-down pointing somewhere real after a rename or delete --
+    // or after an admin takes a group away from the instructor looking at it.
+    if (rosterSel.intake && !rosterCache.intakes.some(i => i.label === rosterSel.intake)) {
+      rosterSel = { intake: '', group: '' };
     }
+    if (rosterSel.group && !rosterCache.groups.some(g => g.intake === rosterSel.intake && g.name === rosterSel.group)) {
+      rosterSel.group = '';
+    }
+    renderWorkspace();
     populateSessionIntakes();
   } catch (err) {
-    if (isAdmin()) rosterTopStatus(escapeHtml(err.message || String(err)), 'bad');
+    rosterTopStatus(escapeHtml(err.message || String(err)), 'bad');
   }
 }
 
@@ -3471,7 +3601,9 @@ function renderIntakePane() {
   if (!box) return;
   const intakes = rosterCache ? rosterCache.intakes : [];
   if (!intakes.length) {
-    box.innerHTML = '<p class="pane-empty">No intakes yet.<br><strong>+ New</strong> to add your first one, for example JAN26.</p>';
+    box.innerHTML = rosterCanEdit()
+      ? '<p class="pane-empty">No intakes yet.<br><strong>+ New</strong> to add your first one, for example JAN26.</p>'
+      : '<p class="pane-empty">No groups are assigned to you yet.<br>An admin can assign you one from <strong>Instructor accounts</strong>.</p>';
     return;
   }
   box.innerHTML = intakes.map(i => {
@@ -3481,7 +3613,7 @@ function renderIntakePane() {
           <span class="pane-item-name">${escapeHtml(i.label)}</span>
           <span class="pane-item-sub">${countLine(groupsOf(i.label))}</span>
         </span>
-        ${on ? `<span class="pane-item-actions">
+        ${on && rosterCanEdit() ? `<span class="pane-item-actions">
           <button type="button" class="icon-btn intake-rename" data-label="${escapeHtml(i.label)}" title="Rename ${escapeHtml(i.label)}">Rename</button>
           <button type="button" class="icon-btn danger intake-delete" data-label="${escapeHtml(i.label)}" title="Delete ${escapeHtml(i.label)}">Delete</button>
         </span>` : ''}
@@ -3502,10 +3634,12 @@ function renderGroupPane() {
     return;
   }
   if (title) title.textContent = 'Groups';
-  if (add) add.hidden = false;
+  if (add) add.hidden = !rosterCanEdit();
   const groups = groupsOf(rosterSel.intake);
   if (!groups.length) {
-    box.innerHTML = '<p class="pane-empty">No groups in this intake yet.<br><strong>+ New</strong> to add G1 — or import a CSV with a Group column and they will be made for you.</p>';
+    box.innerHTML = rosterCanEdit()
+      ? '<p class="pane-empty">No groups in this intake yet.<br><strong>+ New</strong> to add G1 — or import a CSV with a Group column and they will be made for you.</p>'
+      : '<p class="pane-empty">No groups in this intake are assigned to you.</p>';
     return;
   }
   box.innerHTML = groups.map(g => {
@@ -3516,7 +3650,7 @@ function renderGroupPane() {
           <span class="pane-item-name">${escapeHtml(g.name)}</span>
           <span class="pane-item-sub">${g.trainees} trainee${g.trainees === 1 ? '' : 's'}${missing ? `<br><span class="warn-text">${missing} without a login</span>` : ''}</span>
         </span>
-        ${on ? `<span class="pane-item-actions">
+        ${on && rosterCanEdit() ? `<span class="pane-item-actions">
           <button type="button" class="icon-btn group-rename" data-name="${escapeHtml(g.name)}" title="Rename ${escapeHtml(g.name)}">Rename</button>
           <button type="button" class="icon-btn danger group-delete" data-name="${escapeHtml(g.name)}" title="Delete ${escapeHtml(g.name)}">Delete</button>
         </span>` : ''}
@@ -3555,7 +3689,11 @@ function traineeRow(t, opts) {
   }
   const where = opts && opts.showWhere
     ? `<td class="where">${escapeHtml(t.intake || '')} / ${escapeHtml(t.group || '')}</td>` : '';
-  const box = opts && opts.showWhere ? ''
+  // A read-only viewer keeps the two things a covering instructor needs -- the
+  // name, which opens the trainee's record, and the password reset -- and
+  // loses the rest, including the tick box, which only feeds the bulk actions.
+  const canEdit = rosterCanEdit();
+  const box = (opts && opts.showWhere) || !canEdit ? ''
     : `<td class="pick"><input type="checkbox" class="pick-trainee" data-id="${id}"${selectedIds.has(t.energytechId) ? ' checked' : ''} aria-label="Select ${id}" /></td>`;
   return `<tr>
     ${box}
@@ -3564,11 +3702,11 @@ function traineeRow(t, opts) {
     ${where}
     <td>${accountBadge(t.accountStatus || 'none')}</td>
     <td class="row-actions">
-      <button type="button" class="icon-btn trainee-edit" data-id="${id}">Edit</button>
+      ${canEdit ? `<button type="button" class="icon-btn trainee-edit" data-id="${id}">Edit</button>` : ''}
       ${t.accountStatus === 'active'
         ? `<button type="button" class="icon-btn trainee-reset-pw" data-id="${id}" data-name="${escapeHtml(t.name || '')}">Reset password</button>`
         : ''}
-      <button type="button" class="icon-btn danger trainee-delete" data-id="${id}">Delete</button>
+      ${canEdit ? `<button type="button" class="icon-btn danger trainee-delete" data-id="${id}">Delete</button>` : ''}
     </td>
   </tr>`;
 }
@@ -3642,7 +3780,7 @@ function renderTraineePane() {
   const allPicked = list.every(t => selectedIds.has(t.energytechId));
   box.innerHTML = `<div class="table-wrap"><table class="dashboard-table roster-table">
       <thead><tr>
-        <th class="pick"><input type="checkbox" id="pickAll"${allPicked ? ' checked' : ''} aria-label="Select all shown" /></th>
+        ${rosterCanEdit() ? `<th class="pick"><input type="checkbox" id="pickAll"${allPicked ? ' checked' : ''} aria-label="Select all shown" /></th>` : ''}
         <th>EnergyTech ID</th><th>Name</th><th>Account</th><th></th>
       </tr></thead>
       <tbody>${list.map(t => traineeRow(t)).join('')}</tbody></table></div>`;
@@ -3749,11 +3887,34 @@ function bumpGroup(intake, name, dTrainees, dLogins) {
 
 /* ---------------- search across every intake ---------------- */
 
+/* An admin can ask for every trainee in one call. An instructor cannot, and
+ * should not be able to: the backend refuses an unscoped trainee_list from a
+ * non-admin, which is exactly what stops one instructor reading the whole
+ * centre. Rather than take the search box away from them, their index is built
+ * from the groups they cover -- one call each. rosterCache.groups has already
+ * been filtered by the backend to those groups, so the loop is bounded by how
+ * many an admin has assigned them, which is a handful. */
 async function ensureAllTrainees() {
   if (allTrainees) return;
   try {
-    const data = await rosterCall('trainee_list', { token: authToken }, 'energytechTraineeAll');
-    allTrainees = data.ok ? (data.trainees || []) : [];
+    if (rosterCanEdit()) {
+      const data = await rosterCall('trainee_list', { token: authToken }, 'energytechTraineeAll');
+      allTrainees = data.ok ? (data.trainees || []) : [];
+    } else {
+      const seen = new Set();
+      const out = [];
+      for (const g of (rosterCache && rosterCache.groups) || []) {
+        const data = await rosterCall('trainee_list',
+          { token: authToken, intake: g.intake, group: g.name }, 'energytechTraineeAll');
+        if (!data.ok) continue;
+        (data.trainees || []).forEach(t => {
+          if (seen.has(t.energytechId)) return;
+          seen.add(t.energytechId);
+          out.push(t);
+        });
+      }
+      allTrainees = out;
+    }
   } catch { allTrainees = []; }
   renderTraineePane();
 }
