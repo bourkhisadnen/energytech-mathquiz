@@ -13,6 +13,7 @@ const ROOT = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed';
 const CODE = ROOT + '/google_apps_script/Code.gs';
 const APP = ROOT + '/app.js';
 const WS = ROOT + '/worksheet_tex.js';
+const SW = ROOT + '/service-worker.js';
 
 /* A mutation is a temporary edit to a REAL source file, and the process holding
  * that edit can die in ways no handler catches. The signal handlers further
@@ -50,7 +51,7 @@ recoverFromEarlierRun();          // before the originals are read, or a leftove
 
 fs.mkdirSync(SNAP_DIR, { recursive: true });
 const SNAPSHOT = {};
-[CODE, APP, WS].forEach(f => {
+[CODE, APP, WS, SW].forEach(f => {
   const dest = path.join(SNAP_DIR, path.basename(f));
   fs.copyFileSync(f, dest);
   SNAPSHOT[f] = dest;
@@ -597,6 +598,28 @@ const APP_MUTANTS = [
   /* Chapter 04. It never carried the historical 'ch12' key confusion Chapter
    * 12A did, but the same "registered under its own name, papers come from
    * somewhere else" mistake is just as possible to make by hand. */
+  /* The collapsible instructor cards. The first of these is the one worth
+   * holding down: lifting every heading to the top of its card looks tidier
+   * and quietly breaks "My sessions", whose heading lives inside a container
+   * the app hides wholesale to show a session report. */
+  {
+    what: 'every card heading is lifted to the top of its card, stranding "My sessions" above an open report',
+    from: "    h2.parentNode.insertBefore(head, h2);",
+    to:   "    panel.insertBefore(head, panel.firstChild);",
+    suite: 'test_panels.js'
+  },
+  {
+    what: 'a folded card is not remembered, so the page resets itself every visit',
+    from: "      writePanelState(saved);",
+    to:   "      ;",
+    suite: 'test_panels.js'
+  },
+  {
+    what: 'the connection setup card starts open again, back at the top of the instructor\'s attention',
+    from: "const PANELS_COLLAPSED_BY_DEFAULT = ['connectionPanel'];",
+    to:   "const PANELS_COLLAPSED_BY_DEFAULT = [];",
+    suite: 'test_panels.js'
+  },
   {
     what: 'Chapter 04 is registered but its papers come from another chapter',
     from: "  ch04: { label: 'Chapter 04', sets: () => window.QUESTION_BANK_SETS_CH04 || {} }",
@@ -784,6 +807,28 @@ const WS_APP_MUTANTS = [
   }
 ];
 
+/* The service worker is a fourth patch target. It got one the day a missing
+ * comma in its precache list was found: the file had not parsed, so
+ * register() rejected, app.js swallowed the rejection, and the app quietly had
+ * no offline support at all for weeks. Nothing caught it because every suite
+ * drives the page over a live server, where a dead service worker looks
+ * exactly like a working one. test_appshell.js registers it for real. */
+const swOriginal = fs.readFileSync(SW, 'utf8');
+const SW_MUTANTS = [
+  {
+    what: 'the precache list loses a comma, so the worker does not parse and never registers',
+    from: "  './images/ch03_q68_screw.jpg',",
+    to:   "  './images/ch03_q68_screw.jpg'",
+    suite: 'test_appshell.js'
+  },
+  {
+    what: 'the worker promises to precache a file that is not there, failing the whole install',
+    from: "  './icon-192.png',",
+    to:   "  './icon-192-missing.png',",
+    suite: 'test_appshell.js'
+  }
+];
+
 /* The browser suites fetch the app over HTTP. If the server is rooted at a COPY
  * of the source tree, every app.js mutation below is patching a file the browser
  * never loads, and all of them "pass" while testing nothing. That happened. The
@@ -811,9 +856,10 @@ try {
  * reported as SKIPPED two hundred lines into the output where it reads like a
  * footnote. */
 {
-  const sources = { [CODE]: original, [APP]: appOriginal, [WS]: wsOriginal };
+  const sources = { [CODE]: original, [APP]: appOriginal, [WS]: wsOriginal, [SW]: swOriginal };
   const missing = [];
-  [[MUTANTS, CODE], [APP_MUTANTS, APP], [WS_MUTANTS, WS], [WS_APP_MUTANTS, APP]]
+  [[MUTANTS, CODE], [APP_MUTANTS, APP], [WS_MUTANTS, WS], [WS_APP_MUTANTS, APP],
+   [SW_MUTANTS, SW]]
     .forEach(([list, file]) => list.forEach(m => {
       if (!sources[file].includes(m.from)) missing.push(`${path.basename(file)}: ${m.what}`);
     }));
@@ -897,8 +943,10 @@ runMutants(MUTANTS, CODE, original);
 runMutants(APP_MUTANTS, APP, appOriginal);
 runMutants(WS_MUTANTS, WS, wsOriginal);
 runMutants(WS_APP_MUTANTS, APP, appOriginal);
+runMutants(SW_MUTANTS, SW, swOriginal);
 
-const total = MUTANTS.length + APP_MUTANTS.length + WS_MUTANTS.length + WS_APP_MUTANTS.length;
+const total = MUTANTS.length + APP_MUTANTS.length + WS_MUTANTS.length + WS_APP_MUTANTS.length
+            + SW_MUTANTS.length;
 console.log(`\n${caught} of ${total} broken guards were caught by the tests.`);
 if (survived.length) {
   console.log('\nNOT ACTUALLY TESTED:');

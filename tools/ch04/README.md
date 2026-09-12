@@ -49,10 +49,31 @@ question, never to invent a value, and only when it points unambiguously
 (a clear margin over any other candidate) — the same "refuse rather than
 guess" standard the rest of this chapter's solvers hold to.
 
-## Two quirks in the teacher's own file, carried forward rather than "fixed"
+## Two typos in the teacher's own file, corrected at source (2026-09-09)
 
-- **Q4's lesson code** is written `1-1.1` (not `4-1.1`) in all four `.tex`
-  files — a one-off typo in the source, kept as written.
-- **Version A's Q45** has two textually-identical decoy choices ("A" and "C"
-  both read `$206{,}700$ cm$^2$"`) — harmless, since the unique correct answer
-  (`$210{,}000$ cm$^2$`, choice B) isn't one of the duplicates.
+Both were carried faithfully at first and then fixed on request, **in the
+`.tex` files themselves**, with the bank rebuilt from the corrected sources —
+so the app, the worksheet export and the printable worksheets all agree. The
+derivation was re-run afterwards: still 150/150 on B/C/D, still 50/50 on A, and
+**no answer changed**.
+
+- **Q4's lesson code** was written `1-1.1` (a Chapter 1 code) in all four
+  `.tex` files, on a question sitting mid-run among Q1–Q6, which all carry
+  `4-1.1`. Now `4-1.1` in all four.
+- **Version A's Q45** listed the same decoy twice (options A and C both
+  `$206{,}700$ cm$^2$`). Option C is now `$200{,}000$ cm$^2$` — the
+  1-significant-figure value. That is the member of the {1sf, 2sf, 3sf, raw
+  product} set that B, C and D all carry and A was missing, so all four
+  versions now offer the same four kinds of option. The key is unchanged
+  (option B, `$210{,}000$ cm$^2$`).
+
+If you re-derive from a **fresh** copy of the teacher's worksheets, expect both
+typos to reappear — `test_ch04.js` §10 fails loudly if they do.
+
+**This is why `worksheets/` exists.** Chapter 12A's tool directory carries no
+`.tex` files, because nothing in that chapter's sources was ever edited: the
+uploads were the source of truth. Here the corrected `.tex` **is** part of the
+fix, so the four question files and the answer key are kept beside the scripts.
+Rebuild from these, not from the original uploads. (The scripts' `SRC` paths
+still point at the working directory they were run in — as in `tools/ch12a/`,
+they are a record of how the bank was derived rather than a turnkey build.)

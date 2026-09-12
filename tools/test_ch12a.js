@@ -161,7 +161,17 @@ function officialKey() {
     return currentQuiz.length;
   });
   eq(built, 82, 'the whole paper builds');
-  await page.waitForTimeout(600);
+  // Wait for the drawings to actually finish arriving rather than for a fixed
+  // 600ms. This paper pulls 54 SVGs plus a 280KB photograph, and against a
+  // cold server that regularly takes longer than the old fixed wait -- which
+  // reported "the drawings did not load" on a perfectly good build three times
+  // before this was fixed. A check that cries wolf is worse than no check: the
+  // next person reads a real failure here as "just the flaky one" and re-runs.
+  // Settle on the images' own load state, and only then look at them.
+  await page.waitForFunction(() => {
+    const imgs = [...document.querySelectorAll('#quizContainer img')];
+    return imgs.length > 0 && imgs.every(i => i.complete);
+  }, null, { timeout: 30000 }).catch(() => { /* fall through: assertions below report it */ });
   const imgs = await page.evaluate(() => [...document.querySelectorAll('#quizContainer img')]
     .map(i => ({ src: i.getAttribute('src'), w: i.naturalWidth })));
   ok(imgs.length > 0, `${imgs.length} drawings on the paper`);

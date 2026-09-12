@@ -1,4 +1,4 @@
-const CACHE_NAME = 'energytech-quiz-app-v54-ch04';
+const CACHE_NAME = 'energytech-quiz-app-v58-instructor-cards';
 const FILES = [
   './',
   './index.html',
@@ -11,7 +11,12 @@ const FILES = [
   './explanation_links.js',
   './worksheet_tex.js',
   './manifest.webmanifest',
-  './icon.svg',
+  './icon-192.png',
+  './icon-512.png',
+  './icon-maskable-512.png',
+  './apple-touch-icon.png',
+  './favicon-32.png',
+  './favicon-16.png',
   './images/original_q07_circuit.png',
   './images/original_q10_cranes.png',
   './images/original_q28_shaft.png',
@@ -33,7 +38,7 @@ const FILES = [
   './images/ch03_q37_flour.jpg',
   './images/ch03_q38_capsule.jpg',
   './images/ch03_q67_screwdriver.jpg',
-  './images/ch03_q68_screw.jpg'
+  './images/ch03_q68_screw.jpg',
   // Chapter 12A's drawings. The SVGs are listed because every trainee sees
   // them; the PDF twin of each, which only the worksheet export uses, is
   // deliberately NOT listed -- 3.5 MB downloaded onto every device for a

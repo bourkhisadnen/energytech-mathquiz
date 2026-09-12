@@ -5,17 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>EnergyTech Mathematics Quiz App</title>
   <link rel="manifest" href="manifest.webmanifest" />
-  <!-- Without this every browser asks the server root for /favicon.ico and is
-       told 404, on every load. The icon was always here; nothing pointed at it. -->
-  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <!-- Without these every browser asks the server root for /favicon.ico and is
+       told 404, on every load. Two sizes because 16px is what a browser tab
+       actually draws, and letting it downscale the 32 blurs the artwork. -->
+  <link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32" />
+  <link rel="icon" href="favicon-16.png" type="image/png" sizes="16x16" />
+  <!-- iOS home screen. It ignores the manifest icons, ignores transparency,
+       and paints unset pixels black, so this one is deliberately opaque. -->
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
   <link rel="stylesheet" href="style.css" />
   <meta name="theme-color" content="#006fae" />
 </head>
 <body>
   <header class="app-header">
-    <div>
-      <h1>EnergyTech Mathematics Quiz App</h1>
-      <p>Instructor-controlled sessions, trainee submission, and question analysis.</p>
+    <div class="header-brand">
+      <!-- alt is empty on purpose: the h1 beside it already says the app's
+           name, so a screen reader announcing the logo too would just repeat
+           itself. -->
+      <img class="app-logo" src="icon-192.png" alt="" width="192" height="192" />
+      <div>
+        <h1>EnergyTech Mathematics Quiz App</h1>
+        <p>Instructor-controlled sessions, trainee submission, and question analysis.</p>
+      </div>
     </div>
     <div class="header-actions">
       <button id="homeBtn" class="secondary">Home</button>
@@ -115,38 +126,6 @@
         <div class="account-bar">
           <div id="instructorAccountBar">Logged in.</div>
           <button id="logoutBtn" class="secondary" type="button">Log out</button>
-        </div>
-      </section>
-
-      <section class="panel dashboard-panel">
-        <h2>Instructor connection setup</h2>
-        <p class="hint">Paste the Google Apps Script Web App URL. It is needed to save sessions, receive trainee results, and load the dashboard.</p>
-        <div class="grid dashboard-grid">
-          <label>
-            Google Apps Script Web App URL
-            <input id="webAppUrl" placeholder="https://script.google.com/macros/s/..." />
-          </label>
-        </div>
-        <div class="button-row">
-          <button id="saveWebAppUrlBtn" class="secondary">Save URL</button>
-        </div>
-        <div id="onlineStatus" class="feedback empty">Online collection is optional, but recommended for class use.</div>
-      </section>
-
-      <section class="panel">
-        <h2>Change my password</h2>
-        <div class="grid student-grid">
-          <label>
-            Current password
-            <input id="changeOldPassword" type="password" autocomplete="current-password" placeholder="Current password" />
-          </label>
-          <label>
-            New password
-            <input id="changeNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
-          </label>
-        </div>
-        <div class="button-row">
-          <button id="changePasswordBtn" class="secondary">Change password</button>
         </div>
       </section>
 
@@ -422,6 +401,38 @@
              and nowhere else, and there is no way to ask for it again. -->
         <div id="resetResult" class="reset-result" hidden></div>
         <div id="instructorAccountsOutput" class="dashboard-output"></div>
+      </section>
+
+      <section class="panel" id="passwordPanel">
+        <h2>Change my password</h2>
+        <div class="grid student-grid">
+          <label>
+            Current password
+            <input id="changeOldPassword" type="password" autocomplete="current-password" placeholder="Current password" />
+          </label>
+          <label>
+            New password
+            <input id="changeNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="changePasswordBtn" class="secondary">Change password</button>
+        </div>
+      </section>
+
+      <section class="panel dashboard-panel" id="connectionPanel">
+        <h2>Instructor connection setup</h2>
+        <p class="hint">Paste the Google Apps Script Web App URL. It is needed to save sessions, receive trainee results, and load the dashboard.</p>
+        <div class="grid dashboard-grid">
+          <label>
+            Google Apps Script Web App URL
+            <input id="webAppUrl" placeholder="https://script.google.com/macros/s/..." />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="saveWebAppUrlBtn" class="secondary">Save URL</button>
+        </div>
+        <div id="onlineStatus" class="feedback empty">Online collection is optional, but recommended for class use.</div>
       </section>
     </section>
 

@@ -164,11 +164,13 @@ if __name__ == '__main__':
         '// which reproduce the supplied key for all 150 questions of B, C and D\n'
         '// before ever being trusted on A.\n'
         '//\n'
-        "// Note: Version A's own Q45 has two textually-identical decoy choices\n"
-        '// (A and C both read "$206{,}700$ cm$^2$") in the teacher-supplied file --\n'
-        '// a copy/paste slip in the original, not something introduced here. It\n'
-        "// does not affect correctness: the 2-sig-fig answer, $210{,}000$ cm$^2$,\n"
-        '// is choice B and is unique.\n'
+        '// Two typos in the teacher-supplied .tex files were corrected at source\n'
+        '// (2026-09-09), so they are no longer carried here: Q4\'s lesson code read\n'
+        '// "1-1.1" instead of "4-1.1" in all four versions, and Version A\'s Q45\n'
+        '// listed the same decoy twice (options A and C both "$206{,}700$"). The\n'
+        "// duplicate is now $200{,}000$ cm$^2$, the 1-significant-figure value --\n"
+        '// the member of the 1sf/2sf/3sf/raw set that B, C and D all carry and A\n'
+        '// was missing. No answer changed: the key is still option B.\n'
         'window.QUESTION_BANK_SETS_CH04 = ')
     open(os.path.join(APP, 'question_bank_ch04.js'), 'w').write(
         header + json.dumps(bank, indent=2, ensure_ascii=False) + ';\n')

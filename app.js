@@ -22,11 +22,17 @@ const $ = (id) => document.getElementById(id);
 // 'ch12' has meant Chapters 01 & 02 since before any other chapter existed, and
 // session codes already written into the Sheet carry it, so it cannot be handed
 // to the chapter actually named 12A. That one is 'ch12a'.
+//
+// The order written here IS the order the instructor sees -- the question tree,
+// allPapers() and the per-chapter counts all walk Object.keys(CHAPTERS). So the
+// chapters are listed by their number on the syllabus, not by when they were
+// added to the app: 01 & 02, then 03, then 04, then 12A. A new chapter goes in
+// its numbered place in this list, not on the end.
 const CHAPTERS = {
   ch12: { label: 'Chapters 01 & 02', sets: () => window.QUESTION_BANK_SETS || {} },
   ch03: { label: 'Chapter 03', sets: () => window.QUESTION_BANK_SETS_CH03 || {} },
-  ch12a: { label: 'Chapter 12A', sets: () => window.QUESTION_BANK_SETS_CH12A || {} },
-  ch04: { label: 'Chapter 04', sets: () => window.QUESTION_BANK_SETS_CH04 || {} }
+  ch04: { label: 'Chapter 04', sets: () => window.QUESTION_BANK_SETS_CH04 || {} },
+  ch12a: { label: 'Chapter 12A', sets: () => window.QUESTION_BANK_SETS_CH12A || {} }
 };
 const DEFAULT_CHAPTER = 'ch12';
 const DEFAULT_SET = 'original_pdf';
@@ -2895,6 +2901,86 @@ function studentDownloadResult() {
   downloadResult();
 }
 
+/* ---------------- Collapsible instructor cards ----------------
+ * The instructor page is nine cards long and most instructors use two of them
+ * on any given day, so each card's heading carries a triangle that folds it
+ * away, and what is folded is remembered for next time.
+ *
+ * The head is built AROUND the existing <h2>, in the h2's own place in the
+ * DOM, rather than being moved to the top of the card. That matters for "My
+ * sessions", whose heading lives inside #sessionsWorkspace -- a container the
+ * app hides wholesale when a session report is opened. Lifting the heading out
+ * of it would leave "My sessions" stranded above an open report.
+ */
+const PANEL_STATE_KEY = 'energytechPanelCollapsed_v1';
+// Only the connection setup starts folded: the URL ships baked into the build,
+// so the card is there for the day the Apps Script is redeployed and not before.
+const PANELS_COLLAPSED_BY_DEFAULT = ['connectionPanel'];
+
+function readPanelState() {
+  try { return JSON.parse(localStorage.getItem(PANEL_STATE_KEY)) || {}; } catch { return {}; }
+}
+
+function writePanelState(state) {
+  try { localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(state)); } catch { /* private mode; the page still works */ }
+}
+
+function initCollapsiblePanels() {
+  const root = $('teacherInterface');
+  if (!root) return;
+  const state = readPanelState();
+  root.querySelectorAll('section.panel').forEach(panel => {
+    const h2 = panel.querySelector('h2');
+    // No heading means it is the account bar, not a card. No id means there is
+    // nothing to remember the state against, so it is left alone rather than
+    // silently forgetting itself on every reload.
+    if (!h2 || !panel.id || panel.querySelector('.panel-toggle')) return;
+
+    const head = document.createElement('div');
+    head.className = 'panel-head';
+    h2.parentNode.insertBefore(head, h2);
+    head.appendChild(h2);
+
+    const body = document.createElement('div');
+    body.className = 'panel-body';
+    body.id = panel.id + 'Body';
+    while (head.nextSibling) body.appendChild(head.nextSibling);
+    head.parentNode.appendChild(body);
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'panel-toggle';
+    toggle.setAttribute('aria-controls', body.id);
+    toggle.innerHTML = '<span class="panel-caret" aria-hidden="true">▾</span>';
+    head.appendChild(toggle);
+
+    const apply = collapsed => {
+      panel.classList.toggle('is-collapsed', collapsed);
+      body.hidden = collapsed;
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      const label = (collapsed ? 'Expand ' : 'Collapse ') + h2.textContent.trim();
+      toggle.setAttribute('aria-label', label);
+      toggle.title = label;
+    };
+
+    apply(Object.prototype.hasOwnProperty.call(state, panel.id)
+      ? Boolean(state[panel.id])
+      : PANELS_COLLAPSED_BY_DEFAULT.includes(panel.id));
+
+    const flip = () => {
+      const collapsed = !panel.classList.contains('is-collapsed');
+      apply(collapsed);
+      const saved = readPanelState();
+      saved[panel.id] = collapsed;
+      writePanelState(saved);
+    };
+    toggle.addEventListener('click', flip);
+    // The whole heading row is a target as well: a 22px triangle is a small
+    // thing to hit, particularly on the tablets these are used on.
+    head.addEventListener('click', event => { if (!toggle.contains(event.target)) flip(); });
+  });
+}
+
 function init() {
   // Landing and role navigation
   if ($('studentModeBtn')) $('studentModeBtn').addEventListener('click', showTraineeMode);
@@ -3032,6 +3118,7 @@ function init() {
   });
 
   wireRosterUi();
+  initCollapsiblePanels();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('./service-worker.js').catch(() => {});

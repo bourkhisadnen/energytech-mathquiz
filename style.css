@@ -29,6 +29,26 @@ body {
   justify-content: space-between;
   gap: 18px;
 }
+/* The logo and the title travel together, so the title wraps beside the logo
+   rather than under it when the header narrows. min-width:0 lets the text
+   block shrink inside the flex row instead of pushing the header wider. */
+.header-brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.app-logo {
+  width: clamp(38px, 4.4vw, 54px);
+  height: auto;
+  flex: 0 0 auto;
+  /* The artwork brings its own rounded corners and its own blue, which is
+     lighter than the header gradient behind it; the shadow stops it reading as
+     a flat patch stuck onto that gradient. */
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, .28));
+}
+/* On a narrow screen the title and subtitle wrap to four lines, and a
+   vertically centred logo ends up floating beside the gap between them. Align
+   it to the top there so it reads as sitting next to the title. */
+@media (max-width: 640px) {
+  .header-brand { align-items: flex-start; }
+  .app-logo { margin-top: 3px; }
+}
 .app-header h1 { margin: 0 0 4px; font-size: clamp(1.35rem, 2.3vw, 2rem); }
 .app-header p { margin: 0; opacity: .9; }
 .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -43,6 +63,53 @@ main { width: min(1180px, calc(100% - 24px)); margin: 18px auto 36px; }
   margin: 16px 0;
 }
 h2 { margin: 0 0 14px; color: var(--blue); font-size: 1.15rem; }
+
+/* ---- collapsible instructor cards ---- */
+/* The heading row: title on the left, fold triangle on the right. The whole
+   row is clickable, so it gets the pointer cursor rather than just the
+   triangle. */
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.panel-head h2 { margin-bottom: 14px; }
+/* Folded, the heading is all that is left, so its bottom margin would leave
+   the card looking bottom-heavy. */
+.panel.is-collapsed .panel-head h2 { margin-bottom: 0; }
+.panel-toggle {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  margin: -3px -4px 0 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--blue);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.panel-toggle:hover { background: var(--light); border-color: var(--border); }
+.panel-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.panel-caret { display: block; transition: transform .15s ease; }
+/* Pointing down when open, right when folded -- the direction says which way
+   the card will move if you click. */
+.panel.is-collapsed .panel-caret { transform: rotate(-90deg); }
+/* A folded card sits tighter than an open one. */
+.panel.is-collapsed { padding-top: 14px; padding-bottom: 14px; }
+/* An exam already handed in hides its heading; the fold control has to go with
+   it, or an empty header row is left behind. */
+.result-panel.exam-done .panel-head { display: none; }
+/* Nothing to click on paper. */
+@media print { .panel-toggle { display: none; } }
 .grid { display: grid; gap: 12px; }
 .setup-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .student-grid { grid-template-columns: repeat(3, minmax(160px, 1fr)); }

@@ -76,6 +76,20 @@ function officialKey() {
     'named to match Chapters 01/02/03/12A\'s convention -- no "version_a" detour this time');
   eq(reg.counts, [50, 50, 50, 50], '50 questions each');
 
+  // The chapters are listed by their number on the syllabus, not by the order
+  // they were added to the app -- Chapter 04 comes BEFORE Chapter 12A. There is
+  // no sort anywhere: the order is the order CHAPTERS is written in, which is
+  // exactly the kind of thing that regresses silently when the next chapter is
+  // appended to the end of the object. Checked on the rendered tree, which is
+  // what the instructor actually looks at, as well as in the registry.
+  eq(reg.chapters, ['ch12', 'ch03', 'ch04', 'ch12a'],
+    'the chapters are registered in syllabus order, 04 before 12A');
+  const treeOrder = await page.evaluate(() =>
+    [...document.querySelectorAll('#questionTree .tree-chapter > .tree-row .tree-label')]
+      .map(el => el.textContent.trim()));
+  eq(treeOrder, ['Chapters 01 & 02', 'Chapter 03', 'Chapter 04', 'Chapter 12A'],
+    'and the question tree on screen lists them in that order');
+
   console.log('\n=== 2. A key of its own, not a share of anybody else\'s ===');
   const keys = await page.evaluate(() => ({
     a: parseSetKey('ch04:original_pdf'),
@@ -144,7 +158,16 @@ function officialKey() {
     return currentQuiz.length;
   });
   eq(built, 50, 'the whole paper builds');
-  await page.waitForTimeout(600);
+  // Settle on the pictures' own load state rather than a fixed wait -- see the
+  // note on the same check in test_ch12a.js, where a fixed 600ms produced three
+  // false "the drawings did not load" failures against a cold server. This
+  // paper only pulls 10 files and has not flaked yet, but the race is the same.
+  // ('complete' is true for a FAILED load too, so this waits without masking a
+  // genuinely broken picture -- naturalWidth below is still what judges that.)
+  await page.waitForFunction(() => {
+    const imgs = [...document.querySelectorAll('#quizContainer img')];
+    return imgs.length > 0 && imgs.every(i => i.complete);
+  }, null, { timeout: 30000 }).catch(() => { /* fall through: assertions below report it */ });
   const imgs = await page.evaluate(() => [...document.querySelectorAll('#quizContainer img')]
     .map(i => ({ src: i.getAttribute('src'), w: i.naturalWidth })));
   ok(imgs.length > 0, `${imgs.length} drawings/photos on the paper`);
@@ -244,37 +267,61 @@ function officialKey() {
   eq(trip.n, 15, 'of the number asked for');
   eq(trip.chapters, ['ch04'], 'all from Chapter 04');
 
-  console.log('\n=== 10. Two known quirks in the teacher\'s own file, carried forward faithfully ===');
-  // Q4's lesson code is written "1-1.1" (not "4-1.1") in EVERY one of the four
-  // .tex files -- a one-off typo in the source, not something the build
-  // introduced. It is preserved as the teacher wrote it, the same way this
-  // project has always trusted rather than silently "corrected" source text.
+  console.log('\n=== 10. The two source typos, corrected at source and staying corrected ===');
+  // Both of these were in the teacher's own .tex files and were carried
+  // faithfully at first; on 2026-09-09 Adnen asked for them fixed, so they were
+  // corrected in all four .tex sources and the bank rebuilt from those. These
+  // checks are the other way round from the ones they replace: they now fail if
+  // either typo ever comes back -- which is exactly what would happen if a
+  // future rebuild picked up an uncorrected copy of the worksheets.
+
+  // 1. Q4's lesson code read "1-1.1" -- a Chapter 1 code on a Chapter 4
+  //    question -- in every one of the four versions. No exception is carved
+  //    out any more: EVERY question's lesson code must be a 4-x.y.
   const lessonCheck = await page.evaluate(() => {
     const bad = [];
     for (const [setid, set] of Object.entries(QUESTION_BANK_SETS_CH04)) {
       for (const q of set.questions) {
-        if (q.original_number === 4) continue;          // the one known exception
         if (!/^4-\d/.test(q.lesson)) bad.push(`${setid} Q${q.original_number}: ${q.lesson}`);
       }
     }
     return bad;
   });
-  eq(lessonCheck, [], 'every other question\'s lesson code belongs to Chapter 4 (4-x.y)');
+  eq(lessonCheck, [], 'every question\'s lesson code belongs to Chapter 4 (4-x.y), Q4 included');
   const q4lessons = await page.evaluate(() =>
     Object.values(QUESTION_BANK_SETS_CH04).map(s => s.questions[3].lesson));
-  ok(q4lessons.every(l => l === '1-1.1'), 'Q4 carries the source\'s "1-1.1" typo consistently in all four versions, not silently rewritten');
-  // Version A's own Q45 has two textually-identical decoy choices (A and C
-  // both read "206,700 cm^2") in the teacher-supplied file. It doesn't affect
-  // correctness -- the unique 2-sig-fig answer, 210,000 cm^2, is choice B --
-  // but a student who happens to pick the "other" 206,700 is marked wrong for
-  // choosing text that reads the same as a choice. Documented, not "fixed".
+  eq(q4lessons, ['4-1.1', '4-1.1', '4-1.1', '4-1.1'],
+    'Q4 reads 4-1.1 in all four versions, like the Q1-Q6 run it belongs to');
+
+  // 2. Version A's Q45 listed the same decoy twice (options A and C both
+  //    "206,700"). C is now 200,000 -- the 1-significant-figure value, the
+  //    member of the 1sf/2sf/3sf/raw set B, C and D all carry and A lacked.
+  //    The answer did not move: it is still B, the 2-sig-fig 210,000.
   const q45 = await page.evaluate(() => {
     const q = QUESTION_BANK_SETS_CH04.original_pdf.questions[44];
-    const opts = String(q.choices).split('\\item').slice(1).map(s => s.trim());
-    return { opts, answer: q.answer };
+    return {
+      opts: String(q.choices).split('\\item').slice(1).map(s => s.trim()),
+      answer: q.answer
+    };
   });
-  eq(q45.opts[0], q45.opts[2], 'Version A\'s Q45 choices A and C really are identical in the source file');
-  eq(q45.answer, 'b', 'and the correct, unique answer (210,000 cm^2) is unaffected by that duplicate');
+  eq(q45.opts.length, 4, 'Version A\'s Q45 still offers four options');
+  eq([...new Set(q45.opts)].length, 4, 'and all four are now distinct -- the duplicated decoy is gone');
+  ok(/200\{,\}000/.test(q45.opts[2]), 'option C is the 1-significant-figure value, 200,000 cm^2');
+  eq(q45.answer, 'b', 'and the answer is unchanged: B, the 2-sig-fig 210,000 cm^2');
+
+  // The duplicate was A-only, but nothing about it was A-specific, so the
+  // guard is chapter-wide rather than aimed at the one question that had it.
+  const dupes = await page.evaluate(() => {
+    const bad = [];
+    for (const [setid, set] of Object.entries(QUESTION_BANK_SETS_CH04)) {
+      for (const q of set.questions) {
+        const opts = String(q.choices).split('\\item').slice(1).map(s => s.trim()).filter(Boolean);
+        if (new Set(opts).size !== opts.length) bad.push(`${setid} Q${q.original_number}`);
+      }
+    }
+    return bad;
+  });
+  eq(dupes, [], 'and no question on any of the four papers repeats an option');
 
   console.log('\n=== 11. Nothing raw reaches the screen ===');
   const raw = await page.evaluate(() => {

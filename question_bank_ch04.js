@@ -10,11 +10,13 @@
 // which reproduce the supplied key for all 150 questions of B, C and D
 // before ever being trusted on A.
 //
-// Note: Version A's own Q45 has two textually-identical decoy choices
-// (A and C both read "$206{,}700$ cm$^2$") in the teacher-supplied file --
-// a copy/paste slip in the original, not something introduced here. It
-// does not affect correctness: the 2-sig-fig answer, $210{,}000$ cm$^2$,
-// is choice B and is unique.
+// Two typos in the teacher-supplied .tex files were corrected at source
+// (2026-09-09), so they are no longer carried here: Q4's lesson code read
+// "1-1.1" instead of "4-1.1" in all four versions, and Version A's Q45
+// listed the same decoy twice (options A and C both "$206{,}700$"). The
+// duplicate is now $200{,}000$ cm$^2$, the 1-significant-figure value --
+// the member of the 1sf/2sf/3sf/raw set that B, C and D all carry and A
+// was missing. No answer changed: the key is still option B.
 window.QUESTION_BANK_SETS_CH04 = {
   "original_pdf": {
     "label": "Original PDF worksheet",
@@ -46,7 +48,7 @@ window.QUESTION_BANK_SETS_CH04 = {
       {
         "original_number": 4,
         "compact": false,
-        "lesson": "1-1.1",
+        "lesson": "4-1.1",
         "body": "Determine the accuracy of the measurement; that is, give the number of significant digits for the measurement.\\par $0.0657000$ A",
         "choices": "\\item 4 \\item 6 \\item 3 \\item 8",
         "answer": "b"
@@ -424,7 +426,7 @@ window.QUESTION_BANK_SETS_CH04 = {
         "compact": false,
         "lesson": "4-5.1",
         "body": "Use the rules of measurements to evaluate.\\par $(5{,}300\\ \\text{cm})(39.00\\ \\text{cm})$",
-        "choices": "\\item $206{,}700$ cm$^2$ \\item $210{,}000$ cm$^2$ \\item $206{,}700$ cm$^2$ \\item $206{,}000$ cm$^2$",
+        "choices": "\\item $206{,}700$ cm$^2$ \\item $210{,}000$ cm$^2$ \\item $200{,}000$ cm$^2$ \\item $206{,}000$ cm$^2$",
         "answer": "b"
       },
       {
@@ -499,7 +501,7 @@ window.QUESTION_BANK_SETS_CH04 = {
       {
         "original_number": 4,
         "compact": false,
-        "lesson": "1-1.1",
+        "lesson": "4-1.1",
         "body": "Determine the accuracy of the measurement; that is, give the number of significant digits for the measurement.\\par $0.0483000$ A",
         "choices": "\\item 5 \\item 7 \\item 6 \\item 8",
         "answer": "c"
@@ -952,7 +954,7 @@ window.QUESTION_BANK_SETS_CH04 = {
       {
         "original_number": 4,
         "compact": false,
-        "lesson": "1-1.1",
+        "lesson": "4-1.1",
         "body": "Determine the accuracy of the measurement; that is, give the number of significant digits for the measurement.\\par $0.0902000$ A",
         "choices": "\\item 7 \\item 6 \\item 5 \\item 8",
         "answer": "b"
@@ -1405,7 +1407,7 @@ window.QUESTION_BANK_SETS_CH04 = {
       {
         "original_number": 4,
         "compact": false,
-        "lesson": "1-1.1",
+        "lesson": "4-1.1",
         "body": "Determine the accuracy of the measurement; that is, give the number of significant digits for the measurement.\\par $0.0374000$ A",
         "choices": "\\item 7 \\item 8 \\item 6 \\item 5",
         "answer": "c"
