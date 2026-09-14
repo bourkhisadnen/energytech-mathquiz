@@ -1,0 +1,9 @@
+{
+  "name": "energytech-mathquiz-tools",
+  "private": true,
+  "description": "Dev-only tooling: the browser test suites in tools/ and their runner (Playwright).",
+  "devDependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.47.0"
+  }
+}

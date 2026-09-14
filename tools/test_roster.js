@@ -1,11 +1,35 @@
-/* End-to-end test of the rebuilt roster workspace against a mocked Apps Script
- * backend that mirrors Code.gs semantics: admin gating, cascading renames,
- * refusal to delete anything with children, whole-intake import with a group
- * column, bulk moves, and trainee accounts. */
+/* End-to-end test of the rebuilt roster workspace against the REAL
+ * energytech-api backend (Express + Postgres) -- repointed for Phase 6 from
+ * the mocked-Apps-Script version this file used to be.
+ *
+ * The app under test is served by src/app.js itself, straight off
+ * energytech-api/public/ (D3) -- no separate static server, no symlink, no
+ * copy of the source tree. The realpath check that used to guard against a
+ * stale copy (claude/12-exam-page-and-leak.md) now lives in
+ * mutate_backend.js, checking that same static-serve path.
+ *
+ * State setup and assertions talk to the real database at TEST_DATABASE_URL,
+ * never DATABASE_URL, via energytech-api's own test helpers --
+ * tests/helpers/db.js refuses to load against anything else; see its own
+ * comment for why.
+ *
+ * This is a straight repoint, not a rewrite: every UI step, selector and
+ * assertion value below is unchanged from the mocked version. Where the real
+ * backend's shape or behaviour differs from what the mock assumed, the
+ * assertion is left exactly as it was so the mismatch is visible in the
+ * output, rather than quietly adjusted to match. */
 
+const path = require('path');
 const { chromium } = require('playwright');
-const BASE = 'http://127.0.0.1:8902/energytech-mathquiz/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+// Must be required before src/app, so the app under test and these fixtures
+// land on the same (test) database -- see tests/helpers/db.js's own comment.
+const { pool, resetDb, insertInstructor } = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
 
 let failures = [], checks = 0;
 function ok(cond, label) {
@@ -14,216 +38,81 @@ function ok(cond, label) {
   else { console.log('  FAIL  ' + label); failures.push(label); }
 }
 
-/* ---------------- the fake backend ---------------- */
+/* ---------------- seeding the two instructor accounts the mock hardcoded ---------------- */
 
-const norm = s => String(s || '').trim().toUpperCase();
-const GROUP_RE = /^G([1-9]|1[0-9]|20)$/;
+async function seedInstructor(username, displayName, role, password) {
+  const { passwordHash, passwordSalt, passwordAlgo } = await hashPasswordForStorage(password);
+  await insertInstructor({ username, displayName, role, passwordHash, passwordSalt, passwordAlgo });
+}
 
-function newBackend() {
-  return {
-    instructors: {
-      adnen: { password: '1231234', displayName: 'Adnane Khalifa', role: 'admin', token: 'ADMTOK' },
-      sara: { password: 'pw', displayName: 'Sara', role: 'instructor', token: 'INSTOK' }
-    },
-    intakes: [], groups: [], trainees: [], sessions: {}, attempts: [], traineeTokens: {}
-  };
-}
-function auth(db, p) {
-  const name = Object.keys(db.instructors).find(u => db.instructors[u].token === String(p.token || ''));
-  return name ? { ok: true, username: name, role: db.instructors[name].role } : { ok: false, error: 'Not logged in.' };
-}
-function admin(db, p) {
-  const a = auth(db, p);
-  if (!a.ok) return a;
-  return a.role === 'admin' ? a : { ok: false, error: 'Admin access required.' };
-}
-const pub = t => ({ energytechId: t.energytechId, name: t.name, intake: t.intake, group: t.group, accountStatus: t.accountStatus });
+/* ---------------- reading back real backend state (replaces the old in-memory db.*) ---------------- */
 
-function handleGet(db, p) {
-  switch (p.action) {
-    case 'ping': return { ok: true, message: 'EnergyTech Quiz backend is running.' };
-    case 'auth_login': {
-      const u = db.instructors[p.username];
-      return (u && u.password === p.password)
-        ? { ok: true, token: u.token, username: p.username, displayName: u.displayName, role: u.role }
-        : { ok: false, error: 'Wrong username or password.' };
-    }
-    case 'admin_list_instructors': { const a = auth(db, p); return a.ok ? { ok: true, instructors: [] } : a; }
-    case 'roster_list': {
-      const a = auth(db, p); if (!a.ok) return a;
-      return { ok: true,
-        intakes: db.intakes.map(l => ({ label: l, status: 'active' })),
-        groups: db.groups.map(g => {
-          const mine = db.trainees.filter(t => t.intake === g.intake && t.group === g.name);
-          return { intake: g.intake, name: g.name, trainees: mine.length,
-            withAccount: mine.filter(t => t.accountStatus === 'active').length };
-        }) };
-    }
-    case 'trainee_list': {
-      const a = auth(db, p); if (!a.ok) return a;
-      return { ok: true, trainees: db.trainees
-        .filter(t => (!p.intake || norm(t.intake) === norm(p.intake)) && (!p.group || norm(t.group) === norm(p.group)))
-        .map(pub) };
-    }
-    case 'intake_save': {
-      const a = admin(db, p); if (!a.ok) return a;
-      const label = norm(p.label), previous = norm(p.previousLabel);
-      if (!label) return { ok: false, error: 'A label is required.' };
-      if (db.intakes.some(l => norm(l) === label && norm(l) !== previous)) return { ok: false, error: 'An intake with that label already exists.' };
-      if (previous) {
-        const i = db.intakes.findIndex(l => norm(l) === previous);
-        if (i < 0) return { ok: false, error: 'Intake not found.' };
-        db.intakes[i] = label;
-        db.groups.forEach(g => { if (norm(g.intake) === previous) g.intake = label; });
-        db.trainees.forEach(t => { if (norm(t.intake) === previous) t.intake = label; });
-        return { ok: true, label };
-      }
-      db.intakes.push(label);
-      return { ok: true, label };
-    }
-    case 'intake_delete': {
-      const a = admin(db, p); if (!a.ok) return a;
-      const label = norm(p.label);
-      const g = db.groups.filter(x => norm(x.intake) === label).length;
-      if (g) return { ok: false, error: `Intake ${label} still has ${g} group(s). Delete or move them first.` };
-      db.intakes = db.intakes.filter(l => norm(l) !== label);
-      return { ok: true, deleted: label };
-    }
-    case 'group_save': {
-      const a = admin(db, p); if (!a.ok) return a;
-      const intake = norm(p.intake), name = norm(p.name), previous = norm(p.previousName);
-      if (!GROUP_RE.test(name)) return { ok: false, error: 'Group name must be G1 to G20.' };
-      if (!db.intakes.some(l => norm(l) === intake)) return { ok: false, error: `Intake ${intake} does not exist.` };
-      if (db.groups.some(x => norm(x.intake) === intake && norm(x.name) === name && name !== previous)) {
-        return { ok: false, error: `${name} already exists in ${intake}.` };
-      }
-      if (previous) {
-        const g = db.groups.find(x => norm(x.intake) === intake && norm(x.name) === previous);
-        if (!g) return { ok: false, error: 'Group not found.' };
-        g.name = name;
-        db.trainees.forEach(t => { if (norm(t.intake) === intake && norm(t.group) === previous) t.group = name; });
-        return { ok: true, name };
-      }
-      db.groups.push({ intake, name });
-      return { ok: true, name };
-    }
-    case 'group_delete': {
-      const a = admin(db, p); if (!a.ok) return a;
-      const intake = norm(p.intake), name = norm(p.name);
-      const n = db.trainees.filter(t => norm(t.intake) === intake && norm(t.group) === name).length;
-      if (n) return { ok: false, error: `${name} in ${intake} still has ${n} trainee(s). Remove them first.` };
-      db.groups = db.groups.filter(g => !(norm(g.intake) === intake && norm(g.name) === name));
-      return { ok: true, deleted: name };
-    }
-    case 'trainee_save': {
-      const a = admin(db, p); if (!a.ok) return a;
-      const id = norm(p.energytechId), previousId = norm(p.previousId);
-      const intake = norm(p.intake), group = norm(p.group);
-      if (!id) return { ok: false, error: 'EnergyTech ID is required.' };
-      if (!db.groups.some(g => norm(g.intake) === intake && norm(g.name) === group)) return { ok: false, error: `Group ${group} does not exist in intake ${intake}.` };
-      const clash = db.trainees.find(t => t.energytechId === id);
-      if (clash && clash.energytechId !== previousId) return { ok: false, error: `A trainee with ID ${id} already exists.` };
-      if (previousId) {
-        const target = db.trainees.find(t => t.energytechId === previousId);
-        if (!target) return { ok: false, error: 'Trainee not found.' };
-        Object.assign(target, { energytechId: id, name: String(p.name || ''), intake, group });
-        return { ok: true, energytechId: id, updated: true };
-      }
-      db.trainees.push({ energytechId: id, name: String(p.name || ''), intake, group, accountStatus: 'none', password: '' });
-      return { ok: true, energytechId: id };
-    }
-    case 'trainee_delete': {
-      const a = admin(db, p); if (!a.ok) return a;
-      const id = norm(p.energytechId);
-      if (db.attempts.some(x => norm(x.energytechId) === id)) return { ok: false, error: `Trainee ${id} has recorded attempt(s). Revoke the account instead.` };
-      db.trainees = db.trainees.filter(t => t.energytechId !== id);
-      return { ok: true, deleted: id };
-    }
-    case 'trainee_set_account': {
-      const a = admin(db, p); if (!a.ok) return a;
-      const t = db.trainees.find(x => x.energytechId === norm(p.energytechId));
-      if (!t) return { ok: false, error: 'Trainee not found.' };
-      t.accountStatus = p.status;
-      return { ok: true, status: p.status };
-    }
-    case 'trainee_move': {
-      const a = admin(db, p); if (!a.ok) return a;
-      const intake = norm(p.intake), group = norm(p.group);
-      if (!db.groups.some(g => norm(g.intake) === intake && norm(g.name) === group)) return { ok: false, error: `Group ${group} does not exist in intake ${intake}.` };
-      const ids = String(p.ids || '').split(',').map(norm).filter(Boolean);
-      if (!ids.length) return { ok: false, error: 'No trainees were chosen.' };
-      let moved = 0; const missing = [];
-      ids.forEach(id => {
-        const t = db.trainees.find(x => x.energytechId === id);
-        if (!t) { missing.push(id); return; }
-        t.intake = intake; t.group = group; moved++;
-      });
-      return { ok: true, moved, missing };
-    }
-    case 'trainee_signup': {
-      const t = db.trainees.find(x => x.energytechId === norm(p.energytechId));
-      if (!t) return { ok: false, error: 'That EnergyTech ID is not on any intake list. Ask your instructor to add you.' };
-      if (t.accountStatus === 'active') return { ok: false, error: 'An account already exists for this ID.' };
-      if (String(p.password || '').length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
-      t.accountStatus = 'active'; t.password = p.password;
-      const tok = 'TT-' + t.energytechId; db.traineeTokens[tok] = t.energytechId;
-      return { ok: true, token: tok, trainee: pub(t) };
-    }
-    case 'trainee_login': {
-      const t = db.trainees.find(x => x.energytechId === norm(p.energytechId));
-      if (!t || t.accountStatus !== 'active' || t.password !== p.password) return { ok: false, error: 'Wrong EnergyTech ID or password.' };
-      const tok = 'TT-' + t.energytechId; db.traineeTokens[tok] = t.energytechId;
-      return { ok: true, token: tok, trainee: pub(t) };
-    }
-    case 'session': { const s = db.sessions[norm(p.code)]; return s ? { ok: true, session: s } : { ok: false, error: 'Session not found.' }; }
-    default: return { ok: true, message: 'EnergyTech Quiz backend is running.' };
+async function countIntakes() {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM intakes');
+  return rows[0].n;
+}
+async function countGroups() {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM groups');
+  return rows[0].n;
+}
+async function allGroups() {
+  const { rows } = await pool.query(
+    `SELECT ik.label AS intake, g.name FROM groups g JOIN intakes ik ON ik.id = g.intake_id ORDER BY g.id`
+  );
+  return rows;
+}
+async function allTrainees() {
+  const { rows } = await pool.query(`
+    SELECT t.energytech_id AS "energytechId", t.name, ik.label AS intake, g.name AS "group",
+           t.account_status AS "accountStatus"
+      FROM trainees t
+      JOIN intakes ik ON ik.id = t.intake_id
+      JOIN groups g ON g.id = t.group_id
+     ORDER BY t.id`);
+  return rows;
+}
+async function findTrainee(energytechId) {
+  const rows = await allTrainees();
+  return rows.find((t) => t.energytechId === energytechId);
+}
+async function setTraineeActive(energytechId, password) {
+  const { passwordHash, passwordSalt, passwordAlgo } = await hashPasswordForStorage(password);
+  await pool.query(
+    `UPDATE trainees SET account_status = 'active', password_hash = $1, password_salt = $2, password_algo = $3
+      WHERE energytech_id = $4`,
+    [passwordHash, passwordSalt, passwordAlgo, energytechId]
+  );
+}
+async function assignAllGroupsTo(username) {
+  await pool.query(
+    `INSERT INTO instructor_group_assignments (username, group_id)
+       SELECT $1, id FROM groups
+     ON CONFLICT DO NOTHING`,
+    [username]
+  );
+}
+async function latestAttempt() {
+  const { rows } = await pool.query(`
+    SELECT a.*, ik.label AS intake FROM attempts a
+    LEFT JOIN intakes ik ON ik.id = a.intake_id
+    ORDER BY a.submitted_at DESC LIMIT 1`);
+  return rows[0] || null;
+}
+// A real submit renders 30 LaTeX question cards, posts the full payload and
+// writes it to Postgres -- not the mocked backend's synchronous in-memory
+// push. Measured over 10s in a headless browser, so this polls with a
+// generous budget instead of trusting a fixed delay to have been long enough.
+async function waitForAttempt(timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const attempt = await latestAttempt();
+    if (attempt) return attempt;
+    await new Promise((r) => setTimeout(r, 100));
   }
+  return null;
 }
 
-function handlePost(db, body) {
-  if (body.type === 'quiz_session') { if (auth(db, body).ok) db.sessions[norm(body.session.sessionCode)] = body.session; return; }
-  if (body.type === 'trainee_import') {
-    if (!admin(db, body).ok) return;
-    const intake = norm(body.intake), fallback = norm(body.group);
-    const known = new Set(db.groups.filter(g => norm(g.intake) === intake).map(g => norm(g.name)));
-    const wanted = [], bad = [];
-    (body.rows || []).forEach(r => {
-      const g = norm(r.group) || fallback;
-      if (!g) return;
-      if (!GROUP_RE.test(g)) bad.push(g); else if (!wanted.includes(g)) wanted.push(g);
-    });
-    if (bad.length) return;
-    wanted.forEach(g => { if (!known.has(g)) { db.groups.push({ intake, name: g }); known.add(g); } });
-    (body.rows || []).forEach(r => {
-      const id = norm(r.energytechId), g = norm(r.group) || fallback;
-      if (!id || !g || db.trainees.some(t => t.energytechId === id)) return;
-      db.trainees.push({ energytechId: id, name: r.name || '', intake, group: g, accountStatus: 'none', password: '' });
-    });
-    return;
-  }
-  if (body.type === 'quiz_attempt') {
-    let identity = { name: (body.student || {}).name || '', group: '', energytechId: (body.student || {}).energytechId || '', intake: '', registered: 'walk-in' };
-    if (body.traineeToken && db.traineeTokens[body.traineeToken]) {
-      const t = db.trainees.find(x => x.energytechId === db.traineeTokens[body.traineeToken]);
-      if (t) identity = { name: t.name, group: t.group, energytechId: t.energytechId, intake: t.intake, registered: 'yes' };
-    }
-    db.attempts.push(Object.assign({ score: body.score }, identity));
-  }
-}
-
-async function mount(page, db) {
-  await page.route(/script\.google\.com/, async route => {
-    const req = route.request();
-    if (req.method() === 'POST') {
-      let body = {}; try { body = JSON.parse(req.postData() || '{}'); } catch {}
-      handlePost(db, body);
-      return route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' });
-    }
-    const p = Object.fromEntries(new URL(req.url()).searchParams);
-    return route.fulfill({ status: 200, contentType: 'application/javascript',
-      body: `${p.callback}(${JSON.stringify(handleGet(db, p))});` });
-  });
-}
+/* ---------------- driving the real, running app ---------------- */
 
 async function login(page, user = 'adnen', pw = '1231234') {
   await page.click('#teacherModeBtn');
@@ -237,8 +126,15 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
 /* ---------------- the run ---------------- */
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: EXEC });
-  const db = newBackend();
+  await resetDb();
+  await seedInstructor('adnen', 'Adnane Khalifa', 'admin', '1231234');
+  await seedInstructor('sara', 'Sara', 'instructor', 'pw');
+
+  const server = app.listen(0);
+  const { port } = server.address();
+  const BASE = `http://127.0.0.1:${port}/index.html`;
+
+  const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
@@ -248,7 +144,6 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
     if (d.type() === 'confirm') return d.accept();
     await d.accept(dialogAnswer === null ? d.defaultValue() : dialogAnswer);
   });
-  await mount(page, db);
   await page.goto(BASE);
 
   console.log('\n=== 1. The panel loads itself ===');
@@ -306,16 +201,24 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
   ok(/Omar "Abu Ali" Ibrahim, junior/.test(preview), 'quoted comma and doubled quotes parsed');
   await page.click('#confirmImportBtn');
   await page.waitForFunction(() => document.querySelectorAll('#groupList .pane-item').length === 3, null, { timeout: 20000 });
-  ok(db.groups.length === 3, 'G2 and G3 were created by the import');
-  ok(db.trainees.length === 5, 'five trainees on record');
-  ok(db.trainees.filter(t => t.group === 'G2').length === 2, 'the G2 rows went to G2');
+  ok(await countGroups() === 3, 'G2 and G3 were created by the import');
+  ok((await allTrainees()).length === 5, 'five trainees on record');
+  ok((await allTrainees()).filter(t => t.group === 'G2').length === 2, 'the G2 rows went to G2');
 
   console.log('\n=== 6. Filtering by who still has no login ===');
   await page.click('.pane-item[data-group="G2"]');
   await page.waitForFunction(() => document.querySelectorAll('.roster-table tbody tr').length === 2);
-  db.trainees.find(t => t.energytechId === 'ET1003').accountStatus = 'active';
-  await page.click('#loadRosterBtn');
-  await page.waitForTimeout(600);
+  await setTraineeActive('ET1003', 'whatever1');
+  // #loadRosterBtn's handler awaits loadRoster() then refreshTrainees() in
+  // sequence -- trainee_list is the last of the two calls it makes, so
+  // waiting for that response is waiting for both to have landed.
+  await Promise.all([
+    page.waitForResponse((res) => {
+      if (!res.url().includes('/api/call')) return false;
+      try { return res.request().postDataJSON()?.action === 'trainee_list'; } catch { return false; }
+    }),
+    page.click('#loadRosterBtn'),
+  ]);
   await page.click('.filter-chip[data-filter="none"]');
   await page.waitForFunction(() => document.querySelectorAll('.roster-table tbody tr').length === 1);
   const filtered = await page.textContent('#traineeList');
@@ -334,8 +237,8 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
   await page.selectOption('#bulkMoveTarget', 'G3');
   await page.click('#bulkMoveBtn');
   await page.waitForFunction(() => document.querySelectorAll('.roster-table tbody tr').length === 0, null, { timeout: 15000 });
-  ok(db.trainees.filter(t => t.group === 'G3').length === 3, 'all three are in G3 now');
-  ok(/Al-Ghamdi/.test(db.trainees.find(t => t.energytechId === 'ET1003').name), 'the move left their names alone');
+  ok((await allTrainees()).filter(t => t.group === 'G3').length === 3, 'all three are in G3 now');
+  ok(/Al-Ghamdi/.test((await findTrainee('ET1003')).name), 'the move left their names alone');
   ok(await page.isHidden('#bulkBar'), 'the selection is cleared afterwards');
 
   console.log('\n=== 8. Searching across every intake ===');
@@ -364,10 +267,10 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
   await page.selectOption('.trainee-edit-row .edit-group', 'G1');
   await page.click('.save-trainee');
   await page.waitForFunction(() => !document.querySelector('.trainee-edit-row'), null, { timeout: 15000 });
-  const moved = db.trainees.find(t => t.energytechId === 'ET1003');
+  const moved = await findTrainee('ET1003');
   ok(moved.name === 'Turki Saad Al-Ghamdi Renamed', 'the name was saved');
   ok(moved.group === 'G1', 'and the group change moved them');
-  ok(db.trainees.filter(t => t.energytechId === 'ET1003').length === 1, 'editing did not duplicate the row');
+  ok((await allTrainees()).filter(t => t.energytechId === 'ET1003').length === 1, 'editing did not duplicate the row');
 
   console.log('\n=== 10. Deletion is blocked while children exist ===');
   await page.click('.pane-item[data-intake="JAN26"] .intake-delete');
@@ -384,22 +287,30 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
     () => /trainee/.test(document.querySelector('#rosterStatusLine').textContent),
     null, { timeout: 10000 });
   ok(/still has/.test(await page.textContent('#rosterStatusLine')), 'group delete blocked, and says why');
-  ok(db.intakes.length === 1 && db.groups.length === 3, 'nothing was actually deleted');
+  ok((await countIntakes()) === 1 && (await countGroups()) === 3, 'nothing was actually deleted');
 
   console.log('\n=== 11. Renaming cascades ===');
   dialogAnswer = 'FEB26';
   await page.click('.pane-item[data-intake="JAN26"] .intake-rename');
   await page.waitForSelector('.pane-item[data-intake="FEB26"]', { timeout: 10000 });
   dialogAnswer = null;
-  ok(db.groups.every(g => g.intake === 'FEB26'), 'groups followed the intake rename');
-  ok(db.trainees.every(t => t.intake === 'FEB26'), 'trainees followed the intake rename');
+  ok((await allGroups()).every(g => g.intake === 'FEB26'), 'groups followed the intake rename');
+  ok((await allTrainees()).every(t => t.intake === 'FEB26'), 'trainees followed the intake rename');
   ok(await page.isVisible('.pane-item[data-intake="FEB26"].is-selected'), 'and the renamed intake stays selected');
 
   console.log('\n=== 12. Session pickers still fed from the roster ===');
+  // Was broken: #sessionIntake is only repopulated by populateSessionIntakes(),
+  // which used to run at the tail of reconcileSoon()'s debounced
+  // loadRoster(true) after every roster mutation. Phase 5 deleted
+  // reconcileSoon() without noticing that call also drove this dropdown, so a
+  // rename never reached it even though rosterCache itself was already
+  // correct. Fixed in app.js: rosterAction/traineeAction now call
+  // populateSessionIntakes() directly off the already-updated rosterCache, no
+  // extra round trip needed.
   await page.selectOption('#sessionIntake', 'FEB26');
   await page.waitForFunction(() => document.querySelector('#sessionGroup').options.length === 4);
   const groupOpts = await page.$$eval('#sessionGroup option', o => o.map(x => x.textContent));
-  const g1Count = db.trainees.filter(t => t.group === 'G1').length;
+  const g1Count = (await allTrainees()).filter(t => t.group === 'G1').length;
   ok(groupOpts.join('|').includes(`G1 (${g1Count})`),
     `the group picker shows live trainee counts (wanted G1 (${g1Count}), got ${groupOpts.join(' ')})`);
 
@@ -409,14 +320,24 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
   // because a covering teacher needs to see their trainees and reset a
   // forgotten password. What they still cannot do is change anything, which is
   // what the checks below hold -- test_instructor_roster.js covers the rest.
+  //
+  // 'sara' needs group assignments for this step to mean anything: the mocked
+  // backend never modeled assignment-based filtering (it returned every group
+  // to any authenticated caller), but the real roster_list
+  // (src/actions/roster.js) correctly scopes a non-admin to their assigned
+  // groups. Assigning her every group here is fixture setup matching a real
+  // covering instructor, not a workaround for a bug.
+  await assignAllGroupsTo('sara');
   const p2 = await browser.newPage();
   const e2 = [];
   p2.on('pageerror', e => e2.push(String(e)));
-  await mount(p2, db);
   await p2.goto(BASE);
   await login(p2, 'sara', 'pw');
   ok(await p2.isVisible('#intakePanelSection'), 'the roster card is shown to a plain instructor');
-  await p2.waitForTimeout(400);
+  // No fixed wait needed: applyRosterPermissions() runs synchronously inside
+  // enterInstructorInterface(), which login() above already waited for via
+  // '#teacherInterface:not([hidden])'. The async part (rosterCache loading)
+  // only affects the #sessionIntake check below, which already waits for it.
   const editable = await p2.evaluate(() => ({
     add: !document.getElementById('showAddIntake').hidden,
     readonlyClass: document.getElementById('intakePanelSection').classList.contains('is-readonly')
@@ -433,7 +354,6 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
   const te = [];
   tp.on('pageerror', e => te.push(String(e)));
   tp.on('console', m => { if (m.type() === 'error') te.push('console: ' + m.text()); });
-  await mount(tp, db);
   await tp.goto(BASE);
   await tp.click('#studentModeBtn');
   await tp.click('#toggleTraineeSignupBtn');
@@ -446,34 +366,40 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
   ok(/ET1001/.test(profile) && /FEB26/.test(profile), 'the profile shows the ID and the renamed intake');
 
   await page.click('#createSessionBtn');
-  await page.waitForFunction(() => /Session code:/.test(document.querySelector('#sessionStatus').textContent));
+  // "Session code:" appears immediately (the v33 optimistic-apply pattern,
+  // kept deliberately in app.js) -- before the real quiz_session POST has even
+  // been sent, let alone landed. Waiting for "verified" instead means the
+  // trainee page below only tries to load a session that really exists.
+  await page.waitForFunction(() => /verified/.test(document.querySelector('#sessionStatus').textContent), null, { timeout: 15000 });
   const code = await page.$eval('.session-code-box', el => el.textContent.trim());
-  await page.waitForTimeout(500);
   await tp.fill('#studentSessionCode', code);
   await tp.click('#loadTraineeSessionBtn');
   await tp.waitForSelector('#studentQuizArea:not([hidden])');
   await tp.$$eval('#studentQuizContainer .question-card', cards =>
     cards.forEach(c => { const r = c.querySelector('input[type="radio"]'); if (r) r.click(); }));
   await tp.click('#studentSubmitBtn');
-  await tp.waitForTimeout(700);
-  const attempt = db.attempts[db.attempts.length - 1];
-  ok(attempt && attempt.registered === 'yes' && attempt.energytechId === 'ET1001', 'the attempt is identified from the roster');
+  const attempt = await waitForAttempt();
+  // registered is a real Postgres boolean (attempts.registered), not
+  // Code.gs's 'yes'/'walk-in' pair -- see app.js's own history-table and
+  // session-report fix for the same distinction.
+  ok(attempt && attempt.registered === true && attempt.energytech_id === 'ET1001', 'the attempt is identified from the roster');
   ok(attempt && attempt.intake === 'FEB26', 'and carries the intake');
 
   console.log('\n=== 15. Revoking logins in bulk ===');
   await page.click('.pane-item[data-group="G1"]');
-  const inG1 = db.trainees.filter(t => t.group === 'G1').length;
+  const inG1 = (await allTrainees()).filter(t => t.group === 'G1').length;
   await page.waitForFunction(n => document.querySelectorAll('.roster-table tbody tr').length === n, inG1);
   // ET1002 came in by CSV and never signed up, so it is the control here.
-  const hadLogin = db.trainees.filter(t => t.group === 'G1' && t.accountStatus === 'active').map(t => t.energytechId);
+  const hadLogin = (await allTrainees()).filter(t => t.group === 'G1' && t.accountStatus === 'active').map(t => t.energytechId);
   ok(hadLogin.length > 0, `at least one G1 trainee has a login to revoke (${hadLogin.join(', ')})`);
   await page.click('#pickAll');
   await page.waitForSelector('#bulkBar:not([hidden])');
   await page.click('#bulkRevokeBtn');
   await page.waitForFunction(() => /revoked/.test(document.querySelector('#traineeList').textContent), null, { timeout: 15000 });
-  ok(hadLogin.every(id => db.trainees.find(t => t.energytechId === id).accountStatus === 'revoked'),
+  const afterRevoke = await allTrainees();
+  ok(hadLogin.every(id => afterRevoke.find(t => t.energytechId === id).accountStatus === 'revoked'),
     'every trainee who had a login was revoked');
-  ok(db.trainees.find(t => t.energytechId === 'ET1002').accountStatus === 'none',
+  ok(afterRevoke.find(t => t.energytechId === 'ET1002').accountStatus === 'none',
     'a trainee who never had a login is left alone, not marked revoked');
 
   console.log('\n=== 16. Group CSV download ===');
@@ -491,6 +417,8 @@ const csv = (name, text) => ({ name, mimeType: 'text/csv', buffer: Buffer.from(t
   ok(te.length === 0, 'trainee page produced no errors' + (te.length ? ': ' + te.slice(0, 3).join(' | ') : ''));
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -904,16 +904,37 @@ const SW_MUTANTS = [
 
 /* The browser suites fetch the app over HTTP. If the server is rooted at a COPY
  * of the source tree, every app.js mutation below is patching a file the browser
- * never loads, and all of them "pass" while testing nothing. That happened. The
- * served path must therefore BE the source directory -- /tmp/ghpages/
- * energytech-mathquiz is a symlink to it -- and this checks that before the
- * results are worth reading. */
-const SERVED = '/tmp/ghpages/energytech-mathquiz/app.js';
+ * never loads, and all of them "pass" while testing nothing. That happened
+ * (claude/12-exam-page-and-leak.md) via a static file server pointed at a copy
+ * instead of a symlink to the source.
+ *
+ * D3 removed that whole class of failure for test_roster.js specifically:
+ * energytech-api/src/app.js now serves the front-end itself, straight off
+ * energytech-api/public/ with express.static(), in the same process the test
+ * requires and starts. There is no separate static server and no symlink left
+ * to check. What CAN still drift is src/app.js's own static-root argument, if
+ * a later change points it at a build/dist copy instead of public/ directly --
+ * so that argument is read back out of the live source and resolved for real,
+ * not just asserted against itself, before the mutation results are worth
+ * reading. */
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+const ENERGYTECH_API_SRC_APP = path.join(ENERGYTECH_API_ROOT, 'src', 'app.js');
+const ENERGYTECH_API_PUBLIC_APP = path.join(ENERGYTECH_API_ROOT, 'public', 'app.js');
+
+function resolveServedAppJs() {
+  const source = fs.readFileSync(ENERGYTECH_API_SRC_APP, 'utf8');
+  const m = source.match(/express\.static\(path\.join\(__dirname,\s*([^)]+)\)\)/);
+  if (!m) throw new Error(`could not find an express.static(path.join(__dirname, ...)) call in ${ENERGYTECH_API_SRC_APP}`);
+  const segments = m[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, ''));
+  return path.join(path.dirname(ENERGYTECH_API_SRC_APP), ...segments, 'app.js');
+}
+
 try {
-  if (fs.realpathSync(SERVED) !== fs.realpathSync(APP)) {
-    console.log('The served app.js is not the source app.js:');
-    console.log('  served: ' + fs.realpathSync(SERVED));
-    console.log('  source: ' + fs.realpathSync(APP));
+  const served = resolveServedAppJs();
+  if (fs.realpathSync(served) !== fs.realpathSync(ENERGYTECH_API_PUBLIC_APP)) {
+    console.log('The path src/app.js serves is not energytech-api/public/app.js:');
+    console.log('  served: ' + fs.realpathSync(served));
+    console.log('  source: ' + fs.realpathSync(ENERGYTECH_API_PUBLIC_APP));
     console.log('Browser mutations would patch a file nothing loads. Fix the server root first.');
     process.exit(1);
   }
