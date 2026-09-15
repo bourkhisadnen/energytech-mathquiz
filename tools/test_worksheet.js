@@ -23,6 +23,14 @@ let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
 const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
 
+// Every pypdf probe in this file goes through here, not raw execFileSync, so
+// the \r\n Python's print() adds in Windows text mode is stripped in exactly
+// one place -- the next call site to add a probe gets that for free instead
+// of needing to remember it.
+function pyRun(script, ...args) {
+  return execFileSync('python3', ['-c', script, ...args], { encoding: 'utf8' }).replace(/\r/g, '');
+}
+
 const BANK = [];
 for (const [k, v] of Object.entries(window.QUESTION_BANK_SETS || {}))
   v.questions.forEach(q => BANK.push(Object.assign({ __set: 'ch12:' + k }, q)));
@@ -227,19 +235,16 @@ if (whole.compiled) {
   // Field-name enumeration only (no /Kids or /Rect), so pypdf's own
   // AcroForm walk -- already used just below for the same PDF's key -- gives
   // this the identical list pdftk's dump_data_fields would have.
-  const names = execFileSync('python3', ['-c', `
+  const names = pyRun(`
 import sys, warnings; warnings.filterwarnings('ignore')
 import pypdf
 r = pypdf.PdfReader(sys.argv[1])
 acro = r.trailer['/Root']['/AcroForm']
 print('\\n'.join(str(f.get_object().get('/T', '')) for f in acro['/Fields']))
-`, path.join(whole.dir, 'worksheet.pdf')], { encoding: 'utf8' })
-    // Python's print() translates \n to \r\n in text mode on Windows;
-    // strip it rather than let a trailing \r break the field-name match.
-    .replace(/\r/g, '').trim().split('\n').filter(Boolean);
+`, path.join(whole.dir, 'worksheet.pdf')).trim().split('\n').filter(Boolean);
   eq(names.filter(n => /^Q\d+$/.test(n)).length, wholeSet.length,
      'one radio group per question, in the PDF itself');
-  const key = execFileSync('python3', ['-c', `
+  const key = pyRun(`
 import sys, re, warnings; warnings.filterwarnings('ignore')
 import pypdf
 r = pypdf.PdfReader(sys.argv[1])
@@ -248,7 +253,7 @@ blobs = {str(names[i]): names[i+1].get_object()['/JS'].get_data().decode('latin-
          for i in range(0, len(names), 2)}
 m = re.search(r'var ANSWER = \\[(.*?)\\];', blobs['ETW01key'], re.S)
 print(','.join(re.findall(r'"(\\w)"', m.group(1))))
-`, path.join(whole.dir, 'worksheet.pdf')], { encoding: 'utf8' }).replace(/\r/g, '').trim();
+`, path.join(whole.dir, 'worksheet.pdf')).trim();
   eq(key, wholeSet.map(q => String(q.answer).trim()).join(','),
      'and the key inside the compiled PDF is the bank key, question for question');
 }
@@ -256,16 +261,16 @@ print(','.join(re.findall(r'"(\\w)"', m.group(1))))
 console.log('\n=== 11. The header is filled in on screen, not with a pen ===');
 if (whole.compiled) {
   const pdf = path.join(whole.dir, 'worksheet.pdf');
-  const pages = wholeSet.length && Number(execFileSync('python3', ['-c', `
+  const pages = wholeSet.length && Number(pyRun(`
 import sys, warnings; warnings.filterwarnings('ignore')
 import pypdf
 print(len(pypdf.PdfReader(sys.argv[1]).pages))
-`, pdf], { encoding: 'utf8' }).replace(/\r/g, '').trim());
+`, pdf).trim());
 
   // Structure: one field per name, one widget per page, and the boxes must not
   // sit on top of each other -- an annotation left outside a \makebox comes out
   // one slot early and the Group box lands on the word "Group:".
-  const probe = execFileSync('python3', ['-c', `
+  const probe = pyRun(`
 import sys, warnings; warnings.filterwarnings('ignore')
 import pypdf
 r = pypdf.PdfReader(sys.argv[1])
@@ -289,7 +294,7 @@ def overlaps(a, b):
 pairs = [(x, y) for i, x in enumerate(want) for y in want[i+1:] if x in rects and y in rects]
 print(sum(1 for x, y in pairs if overlaps(rects[x], rects[y])))
 print(int(all(rects[k][2] > rects[k][0] and rects[k][3] > rects[k][1] for k in rects)))
-`, pdf], { encoding: 'utf8' }).replace(/\r/g, '').trim().split('\n');
+`, pdf).trim().split('\n');
 
   probe[0].split('|').forEach(part => {
     const [nm, entries, kids, type] = part.split(':');
@@ -301,7 +306,7 @@ print(int(all(rects[k][2] > rects[k][0] and rects[k][3] > rects[k][1] for k in r
   eq(Number(probe[2]), 1, 'each box has a real rectangle');
 
   // The point of the whole thing: type, save, and it is still there.
-  const roundTrip = execFileSync('python3', ['-c', `
+  const roundTrip = pyRun(`
 import sys, warnings, os; warnings.filterwarnings('ignore')
 import pypdf
 from pypdf.generic import TextStringObject, NameObject
@@ -315,14 +320,14 @@ w.write(out)
 got = pypdf.PdfReader(out).get_fields()
 print('|'.join(str(got[k].get('/V')) for k in ('Name', 'Group', 'EnergyTechID')))
 print(pypdf.PdfReader(out).trailer['/Root']['/AcroForm'].get('/NeedAppearances'))
-`, pdf, path.join(whole.dir, 'filled.pdf')], { encoding: 'utf8' }).replace(/\r/g, '').trim().split('\n');
+`, pdf, path.join(whole.dir, 'filled.pdf')).trim().split('\n');
   eq(roundTrip[0], 'Mohammed Al-Otaibi|G1|ET1001',
      'what is typed into the header survives being saved and reopened');
   eq(roundTrip[1], 'True',
      'and NeedAppearances is set, so a viewer draws the text it was given');
 
   // Clearing the answers must not clear who you are.
-  const graderJs = execFileSync('python3', ['-c', `
+  const graderJs = pyRun(`
 import sys, warnings; warnings.filterwarnings('ignore')
 import pypdf
 r = pypdf.PdfReader(sys.argv[1])
@@ -330,7 +335,7 @@ names = r.trailer['/Root']['/Names']['/JavaScript']['/Names']
 blobs = {str(names[i]): names[i+1].get_object()['/JS'].get_data().decode('latin-1')
          for i in range(0, len(names), 2)}
 print(blobs.get('ETW02lib', ''))
-`, pdf], { encoding: 'utf8' }).replace(/\r\n/g, '\n');
+`, pdf);
   const reset = (graderJs.match(/function etReset\(doc\)[\s\S]*?\n\}/) || [''])[0];
   ok(/resetForm\(fields\)/.test(reset), 'Clear all resets a named list of fields');
   ok(!/resetForm\(\s*\)/.test(reset), 'and never bare resetForm(), which would wipe the header too');

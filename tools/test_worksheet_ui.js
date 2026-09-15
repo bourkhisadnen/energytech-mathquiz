@@ -34,6 +34,14 @@ async function seedInstructor(username, displayName, role, password) {
   await insertInstructor({ username, displayName, role, passwordHash, passwordSalt, passwordAlgo });
 }
 
+// Every pypdf probe in this file goes through here, not raw execFileSync, so
+// the \r\n Python's print() adds in Windows text mode is stripped in exactly
+// one place -- the next call site to add a probe gets that for free instead
+// of needing to remember it.
+function pyRun(script, ...args) {
+  return execFileSync('python3', ['-c', script, ...args], { encoding: 'utf8' }).replace(/\r/g, '');
+}
+
 // MiKTeX on Windows refuses \openout on any extension in this list -- the
 // exact reason etgrader.js/etkey.js had to become etgrader.js.dat/etkey.js.dat
 // (claude/08-interactive-worksheet-export.md, "The embedded scripts are
@@ -245,16 +253,13 @@ async function makeSession(p, { label, paperKey, count, mode, name, seed }) {
     // AcroForm walk -- already used just below for this PDF's scripts and
     // key -- gives this the identical list pdftk's dump_data_fields would
     // have.
-    const names = execFileSync('python3', ['-c', `
+    const names = pyRun(`
 import sys, warnings; warnings.filterwarnings('ignore')
 import pypdf
 r = pypdf.PdfReader(sys.argv[1])
 acro = r.trailer['/Root']['/AcroForm']
 print('\\n'.join(str(f.get_object().get('/T', '')) for f in acro['/Fields']))
-`, pdfPath], { encoding: 'utf8' })
-      // Python's print() translates \n to \r\n in text mode on Windows;
-      // strip it rather than let a trailing \r break the field-name match.
-      .replace(/\r/g, '').trim().split('\n').filter(Boolean);
+`, pdfPath).trim().split('\n').filter(Boolean);
     const radios = names.filter(n => /^Q\d+$/.test(n));
     eq(radios.length, nq, 'the PDF has one radio group per question');
     ['Total', 'Score', 'Percent', 'WrongList', 'BlankList', 'CalcBtn', 'ResetBtn'].forEach(f =>
@@ -263,7 +268,7 @@ print('\\n'.join(str(f.get_object().get('/T', '')) for f in acro['/Fields']))
 
     // The name tree lives inside a compressed object stream, so grepping the
     // bytes finds nothing even when the scripts are there. Ask a PDF library.
-    const probe = execFileSync('python3', ['-c', `
+    const probe = pyRun(`
 import sys, re, warnings; warnings.filterwarnings('ignore')
 import pypdf
 r = pypdf.PdfReader(sys.argv[1])
@@ -274,7 +279,7 @@ key = blobs.get('ETW01key', '')
 letters = re.findall(r'"(\\w)"', (re.search(r'var ANSWER = \\[(.*?)\\];', key, re.S) or [None,''])[1] if re.search(r'var ANSWER = \\[(.*?)\\];', key, re.S) else '')
 print(len(blobs), ','.join(letters))
 print('etFeedback' in blobs.get('ETW02lib',''))
-`, pdfPath], { encoding: 'utf8' }).replace(/\r/g, '').trim().split('\n');
+`, pdfPath).trim().split('\n');
     const [scriptCount, keyInPdf] = probe[0].split(' ');
     eq(Number(scriptCount), 2, 'the PDF carries both document-level scripts');
     eq(keyInPdf, onScreen, 'and the key inside the PDF is the paper the app built');
