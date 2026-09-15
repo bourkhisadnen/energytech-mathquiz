@@ -2754,38 +2754,45 @@ function openWorksheetInOverleaf() {
      site, or use <strong>Download .tex</strong>.`);
 }
 
-async function callApi(url, params = {}, timeoutMs = 30000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    
-    const data = await response.json();
-    return data;
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
-      throw new Error('Google Apps Script did not answer in time. Press Refresh to try again.');
-    }
-    throw err;
-  }
-}
-
-// Keep getJsonp as an alias for backward compatibility
 function getJsonp(url, params = {}, prefix = 'energytechJsonp', timeoutMs = 30000) {
-  return callApi(url, params, timeoutMs);
+  return new Promise((resolve, reject) => {
+    const callbackName = `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    let finished = false;
+    const timeoutId = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      delete window[callbackName];
+      const old = document.getElementById(callbackName);
+      if (old) old.remove();
+      reject(new Error('Google Apps Script did not answer in time. '
+        + 'Press Refresh to try again, or run Test backend connection if it keeps happening.'));
+    }, timeoutMs);
+
+    window[callbackName] = (data) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeoutId);
+      delete window[callbackName];
+      const old = document.getElementById(callbackName);
+      if (old) old.remove();
+      resolve(data);
+    };
+
+    const script = document.createElement('script');
+    script.id = callbackName;
+    const query = new URLSearchParams(Object.assign({}, params, { callback: callbackName, t: Date.now() }));
+    const sep = url.includes('?') ? '&' : '?';
+    script.src = `${url}${sep}${query.toString()}`;
+    script.onerror = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeoutId);
+      delete window[callbackName];
+      script.remove();
+      reject(new Error('Could not load Google Apps Script. Check deployment permissions and the Web App URL.'));
+    };
+    document.body.appendChild(script);
+  });
 }
 
 /* Runs a short sequence of probes rather than a single check, because
