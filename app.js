@@ -6,7 +6,7 @@ let currentSession = null;
 let activeRole = 'teacher';
 let studentSubmitted = false;
 
-const DEFAULT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwVdQv6dN7NoVCLaIF1acf3imDOMgFp_5TdEAJiLpV1PGK6KJmiXHq2CtiBjhz2qoEW/exec'
+const DEFAULT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzqpiZRw1mofWof5PLSpzbXXbI4xutnrBhayyVvtoUcYs5O3REAZjP97Vi1nFqiRJQ6/exec'
 
 const WEB_APP_URL_STORAGE_KEY = 'energytechWebAppUrl_v2';
 const AUTH_TOKEN_KEY = 'energytechAuthToken_v1';

@@ -12,7 +12,7 @@ It also adds instructor-created session codes, Practice Mode / Assessment Mode, 
 This version already contains the Google Apps Script Web App URL:
 
 ```text
-https://script.google.com/macros/s/AKfycbwVdQv6dN7NoVCLaIF1acf3imDOMgFp_5TdEAJiLpV1PGK6KJmiXHq2CtiBjhz2qoEW/exec
+https://script.google.com/macros/s/AKfycbzqpiZRw1mofWof5PLSpzbXXbI4xutnrBhayyVvtoUcYs5O3REAZjP97Vi1nFqiRJQ6/exec
 ```
 
 Trainees do not need to paste the URL. They only need the quiz app link and the session code.
