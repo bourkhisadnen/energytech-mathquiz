@@ -416,20 +416,23 @@ const WORKSHEET_MACHINERY = String.raw`\makeatletter
 
 \AtBeginDocument{%
   \immediate\pdfobj stream
-    attr{/Type/XObject/Subtype/Form/BBox[0 0 11 11]/Resources<<>>}
-    {q 1 g 0.12 0.22 0.39 RG 0.8 w
-     9.4 5.5 m 9.4 7.65 7.65 9.4 5.5 9.4 c 3.35 9.4 1.6 7.65 1.6 5.5 c
-     1.6 3.35 3.35 1.6 5.5 1.6 c 7.65 1.6 9.4 3.35 9.4 5.5 c B Q}%
-  \xdef\ws@apoff{\the\pdflastobj\space 0 R}%
-  \immediate\pdfobj stream
-    attr{/Type/XObject/Subtype/Form/BBox[0 0 11 11]/Resources<<>>}
-    {q 1 g 0.12 0.22 0.39 RG 0.8 w
-     9.4 5.5 m 9.4 7.65 7.65 9.4 5.5 9.4 c 3.35 9.4 1.6 7.65 1.6 5.5 c
-     1.6 3.35 3.35 1.6 5.5 1.6 c 7.65 1.6 9.4 3.35 9.4 5.5 c B
-     0.12 0.22 0.39 rg
-     7.7 5.5 m 7.7 6.71 6.71 7.7 5.5 7.7 c 4.29 7.7 3.3 6.71 3.3 5.5 c
-     3.3 4.29 4.29 3.3 5.5 3.3 c 6.71 3.3 7.7 4.29 7.7 5.5 c f Q}%
-  \xdef\ws@apon{\the\pdflastobj\space 0 R}%
+  attr{/Type/XObject/Subtype/Form/BBox[0 0 26 14]/Resources<<>>}
+  {q 1 0 0 1 0 1.5 cm
+   1 g 0.12 0.22 0.39 RG 0.8 w
+   9.4 5.5 m 9.4 7.65 7.65 9.4 5.5 9.4 c 3.35 9.4 1.6 7.65 1.6 5.5 c
+   1.6 3.35 3.35 1.6 5.5 1.6 c 7.65 1.6 9.4 3.35 9.4 5.5 c B Q}%
+\xdef\ws@apoff{\the\pdflastobj\space 0 R}%
+
+\immediate\pdfobj stream
+  attr{/Type/XObject/Subtype/Form/BBox[0 0 26 14]/Resources<<>>}
+  {q 1 0 0 1 0 1.5 cm
+   1 g 0.12 0.22 0.39 RG 0.8 w
+   9.4 5.5 m 9.4 7.65 7.65 9.4 5.5 9.4 c 3.35 9.4 1.6 7.65 1.6 5.5 c
+   1.6 3.35 3.35 1.6 5.5 1.6 c 7.65 1.6 9.4 3.35 9.4 5.5 c B
+   0.12 0.22 0.39 rg
+   7.7 5.5 m 7.7 6.71 6.71 7.7 5.5 7.7 c 4.29 7.7 3.3 6.71 3.3 5.5 c
+   3.3 4.29 4.29 3.3 5.5 3.3 c 6.71 3.3 7.7 4.29 7.7 5.5 c f Q}%
+\xdef\ws@apon{\the\pdflastobj\space 0 R}%
 }
 
 \newcounter{wsq}
@@ -493,10 +496,19 @@ const WORKSHEET_MACHINERY = String.raw`\makeatletter
   \gdef\ws@kids{}%
 }
 \newcommand\ws@widget[1]{%
-  \pdfannot width 10bp height 8.5bp depth 1.5bp{%
-    /Subtype/Widget /FT/Btn /F 4 /Parent \ws@parent\space 0 R /AS/Off
-    /MK<</BC[0.12 0.22 0.39]/BG[1 1 1]>>
-    /BS<</W 1/S/S>>
+  % /Ff is stated here as well as on the parent. It is inheritable, so this is
+  % redundant for a viewer that resolves /Parent first -- which desktop Acrobat
+  % does. Acrobat on Android classifies each annotation on its own, sees /FT/Btn
+  % with no /Ff, and falls back to /Ff 0, which on a /Btn means checkbox. That
+  % is what let all four options light up at once.
+  %
+  % /MK and /BS are gone. They describe a border and a background for the whole
+  % /Rect, which a viewer paints when it has to construct an appearance. At the
+  % old 10bp square that was invisible behind the circle; at 26x14 it would draw
+  % a white box with a dark outline around every option. Both appearance states
+  % are supplied in /AP, so nothing needs them.
+  \pdfannot width 26bp height 11bp depth 3bp{%
+    /Subtype/Widget /FT/Btn /Ff 49152 /F 4 /Parent \ws@parent\space 0 R /AS/Off
     /AP<</N<</Off \ws@apoff /#1 \ws@apon>>>>
   }%
   \xdef\ws@kids{\ws@kids\space\the\pdflastannot\space 0 R}%
@@ -510,7 +522,7 @@ const WORKSHEET_MACHINERY = String.raw`\makeatletter
 \newcommand\opt[1]{%
   \stepcounter{wsopt}%
   \par\vspace{0.6pt}\noindent
-  \makebox[13bp][l]{\ws@widget{\alph{wsopt}}}%
+  \makebox[13bp][l]{\rlap{\ws@widget{\alph{wsopt}}}}%
   \normalcolor\upshape\alph{wsopt}) #1%
 }
 
