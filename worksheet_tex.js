@@ -508,7 +508,7 @@ const WORKSHEET_MACHINERY = String.raw`\makeatletter
   % a white box with a dark outline around every option. Both appearance states
   % are supplied in /AP, so nothing needs them.
   \pdfannot width 26bp height 11bp depth 3bp{%
-    /Subtype/Widget /FT/Btn /Ff 49152 /F 4 /Parent \ws@parent\space 0 R /AS/Off
+    /Subtype/Widget /F 4 /Parent \ws@parent\space 0 R /AS/Off
     /AP<</N<</Off \ws@apoff /#1 \ws@apon>>>>
   }%
   \xdef\ws@kids{\ws@kids\space\the\pdflastannot\space 0 R}%
