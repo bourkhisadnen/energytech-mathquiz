@@ -1,89 +1,83 @@
-/* The exam flow in a real browser.
+/* The exam flow in a real browser, against the REAL energytech-api backend
+ * (Express + Postgres) -- repointed for Phase 6 from the mocked-Apps-Script
+ * version this file used to be. See test_roster.js's header for the shared
+ * mechanics (served from public/ via src/app.js, seeded/asserted through
+ * TEST_DATABASE_URL, never DATABASE_URL).
  *
  * Two trainees load the same code and must see the same questions in different
  * orders with differently-arranged choices; the trainee's own list must show the
  * exam with no mark until it is released; and the review, once released, must
  * show the paper as it was actually sat -- which is the part that fails
- * silently if the per-launch seed is not carried through. */
+ * silently if the per-launch seed is not carried through.
+ *
+ * This is a straight repoint, not a rewrite: every UI step, selector and
+ * assertion value below is unchanged from the mocked version except where a
+ * value can only be read by querying the real database instead of an
+ * intercepted POST body, or where the first real run found the mock had been
+ * wrong (see git history / the run report for both):
+ *   - attempts.order_seed was BIGINT; newOrderSeed() (app.js) has never
+ *     produced a number. Fixed in migration
+ *     1789439433592_opaque-payload-fields-to-text -- no workaround needed
+ *     here anymore.
+ *   - "the mark is shown" expected "3 / 8", the mock's my_history reply
+ *     hardcoded regardless of what was actually submitted. Step 2 always
+ *     submits every correct answer, so a real backend showing 8/8 is
+ *     correct; the assertion now expects that instead. */
+
+const path = require('path');
 const { chromium } = require('playwright');
-const BASE = 'http://127.0.0.1:8902/energytech-mathquiz/index.html';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+const {
+  pool, resetDb, insertInstructor, insertIntake, insertGroup, insertTrainee, issueInstructorToken,
+} = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
 const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
 
-const EXAM = {
-  sessionCode: 'G1-9001', sessionName: 'Midterm exam', intake: 'JAN26', group: 'G1',
-  mode: 'assessment', questionSet: 'Chapters 01 & 02 — Original worksheet',
-  questionSetKey: 'ch12:original_pdf', seed: 'EXAM-SEED', questionCount: 8,
-  orderMode: 'original', showOriginalNumbers: true, requireAll: true,
-  allowWalkIn: false, shuffleEachLaunch: true, resultsPublished: false
-};
+const TRAINEE_PASSWORD = 'secret1';
 
-let published = false;
-let posted = [];
-
-// Each page is a different trainee, with its own sitting record -- the same
-// shape the backend enforces. A mock that let one identity sit twice would be
-// modelling something the app no longer allows.
-function route(p, who) {
-  who = who || 'ET1000';
-  return p.route(/script\.google\.com/, r => {
-    const req = r.request();
-    if (req.method() === 'POST') {
-      try {
-        const body = JSON.parse(req.postData() || '{}');
-        posted.push(body);
-        if (body.type === 'quiz_attempt') sittings[who] = (sittings[who] || 0) + 1;
-      } catch { /* opaque */ }
-      return r.fulfill({ status: 200, body: 'ok' });
-    }
-    const q = Object.fromEntries(new URL(req.url()).searchParams);
-    let d = { ok: true, message: 'ok' };
-    if (q.action === 'session') d = { ok: true, session: EXAM,
-      sitting: q.token ? { sat: sittings[who] || 0, allowed: 1, maySit: !(sittings[who] > 0) } : null };
-    if (q.action === 'trainee_login') d = { ok: true, token: 'TOK-' + who,
-      trainee: { energytechId: who, name: 'Trainee ' + who, intake: 'JAN26', group: 'G1', accountStatus: 'active' } };
-    if (q.action === 'my_history') d = { ok: true,
-      trainee: { energytechId: 'ET1000', name: 'Mohammed Al-Otaibi', intake: 'JAN26', group: 'G1', accountStatus: 'active' },
-      lessons: published ? [{ lesson: '1-1.1', correct: 3, total: 8, percent: 38 }] : [],
-      attempts: [Object.assign({
-        timestamp: '2026-08-20T09:00:00Z', sessionCode: 'G1-9001', sessionName: 'Midterm exam',
-        mode: 'assessment', questionSet: EXAM.questionSet, registered: 'yes'
-      }, published
-        ? { attemptId: 'E1', questionSetKey: EXAM.questionSetKey, seed: EXAM.seed, questionCount: 8,
-            orderMode: 'original', orderSeed: 'SEED-LAUNCH-1', score: 3, total: 8, percent: 38, released: true }
-        : { attemptId: '', questionSetKey: '', seed: '', questionCount: 8, orderMode: '',
-            orderSeed: '', score: null, total: null, percent: null, released: false })]
-    };
-    // The real backend refuses an unreleased exam. A mock that answered anyway
-    // would let a client bug through -- and did, the first time this ran.
-    if (q.action === 'my_attempt' && !published) {
-      d = { ok: false, error: 'Your instructor has not released the results of this exam yet.' };
-    } else if (q.action === 'my_attempt') d = { ok: true,
-      attempt: { attemptId: 'E1', timestamp: '2026-08-20T09:00:00Z', name: 'Mohammed Al-Otaibi',
-        sessionCode: 'G1-9001', sessionName: 'Midterm exam', mode: 'assessment',
-        questionSet: EXAM.questionSet, questionSetKey: EXAM.questionSetKey, seed: EXAM.seed,
-        questionCount: 8, orderMode: 'original', orderSeed: 'SEED-LAUNCH-1',
-        score: 3, total: 8, percent: 38 },
-      items: examItems };
-    return r.fulfill({ status: 200, contentType: 'application/javascript', body: q.callback + '(' + JSON.stringify(d) + ');' });
-  });
+let BASE, API_URL;
+async function api(action, params, token) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(API_URL, { method: 'POST', headers, body: JSON.stringify({ action, ...params }) });
+  return res.json();
 }
 
-let examItems = [];
-const sittings = {};
+async function latestAttempt(sessionCode, energytechId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM attempts WHERE session_code = $1 AND energytech_id = $2 ORDER BY submitted_at DESC LIMIT 1`,
+    [sessionCode, energytechId]
+  );
+  return rows[0] || null;
+}
+// Real submit = network round trip + Postgres write, not the mocked
+// backend's synchronous in-memory push -- see test_roster.js's own note.
+async function waitForAttempt(sessionCode, energytechId, timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const attempt = await latestAttempt(sessionCode, energytechId);
+    if (attempt) return attempt;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return null;
+}
 
 /* One trainee sitting the exam: load the code, read what is on screen. */
 async function sitExam(browser, who) {
   const p = await browser.newPage({ viewport: { width: 900, height: 1000 } });
   const errs = [];
   p.on('pageerror', e => errs.push(String(e)));
-  await route(p, who);
   await p.goto(BASE);
   await p.click('#studentModeBtn');
   await p.fill('#traineeLoginId', who);
-  await p.fill('#traineeLoginPassword', 'x');
+  await p.fill('#traineeLoginPassword', TRAINEE_PASSWORD);
   await p.click('#traineeLoginBtn');
   await p.waitForSelector('#traineeHomePanel:not([hidden])');
   await p.fill('#studentSessionCode', 'G1-9001');
@@ -98,8 +92,43 @@ async function sitExam(browser, who) {
   return { page: p, paper, seed, errs };
 }
 
+async function loginTrainee(p, who) {
+  await p.goto(BASE);
+  await p.click('#studentModeBtn');
+  await p.fill('#traineeLoginId', who);
+  await p.fill('#traineeLoginPassword', TRAINEE_PASSWORD);
+  await p.click('#traineeLoginBtn');
+}
+
 (async () => {
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+  await resetDb();
+  await insertInstructor({ username: 'owner1', displayName: 'Owner One', role: 'instructor' });
+  const itoken = await issueInstructorToken('owner1');
+  const intakeId = await insertIntake('JAN26');
+  const groupId = await insertGroup(intakeId, 'G1');
+  for (const who of ['ET1000', 'ET1001']) {
+    const { passwordHash, passwordSalt, passwordAlgo } = await hashPasswordForStorage(TRAINEE_PASSWORD);
+    await insertTrainee({
+      energytechId: who, name: `Trainee ${who}`, intakeId, groupId,
+      accountStatus: 'active', passwordHash, passwordSalt, passwordAlgo,
+    });
+  }
+
+  const server = app.listen(0);
+  const { port } = server.address();
+  BASE = `http://127.0.0.1:${port}/index.html`;
+  API_URL = `http://127.0.0.1:${port}/api/call`;
+
+  const created = await api('quiz_session', {
+    sessionCode: 'G1-9001', sessionName: 'Midterm exam', intake: 'JAN26', group: 'G1',
+    mode: 'assessment', questionSet: 'Chapters 01 & 02 — Original worksheet',
+    questionSetKey: 'ch12:original_pdf', seed: 'EXAM-SEED', questionCount: 8,
+    orderMode: 'original', showOriginalNumbers: true, requireAll: true,
+    allowWalkIn: false, shuffleEachLaunch: true,
+  }, itoken);
+  if (!created.ok) { console.error('FATAL: could not create the exam session', created); process.exit(1); }
+
+  const browser = await chromium.launch();
 
   console.log('\n=== 1. Two trainees, one code ===');
   const A = await sitExam(browser, 'ET1000');
@@ -130,28 +159,17 @@ async function sitExam(browser, who) {
       if (el) el.click();
     });
   });
-  posted = [];
   await page.click('#studentSubmitBtn');
-  await page.waitForTimeout(500);
-  const sent = posted.find(x => x.type === 'quiz_attempt');
+  const sent = await waitForAttempt('G1-9001', 'ET1000');
   ok(Boolean(sent), 'the attempt was submitted');
-  eq(sent.score.correct, sent.score.total, 'every answer taken from the paper on screen was marked correct');
-  eq(sent.quiz.orderSeed, A.seed, 'and the arrangement seed went with it');
-  examItems = sent.items.map(i => ({
-    quizNumber: i.quizNumber, originalNumber: i.originalNumber, lesson: i.lesson,
-    answer: i.studentAnswer, correctAnswer: i.correctAnswer, result: i.result
-  }));
+  eq(sent.score, sent.total, 'every answer taken from the paper on screen was marked correct');
+  eq(String(sent.order_seed), String(A.seed), 'and the arrangement seed went with it');
 
   console.log('\n=== 3. Before release, the mark is not there ===');
   const p3 = await browser.newPage({ viewport: { width: 900, height: 1000 } });
   const errs3 = [];
   p3.on('pageerror', e => errs3.push(String(e)));
-  await route(p3, 'ET1000');
-  await p3.goto(BASE);
-  await p3.click('#studentModeBtn');
-  await p3.fill('#traineeLoginId', 'ET1000');
-  await p3.fill('#traineeLoginPassword', 'x');
-  await p3.click('#traineeLoginBtn');
+  await loginTrainee(p3, 'ET1000');
   await p3.waitForSelector('.attempt-row');
   const body3 = await p3.textContent('#myHistoryBody');
   ok(/Midterm exam/.test(body3), 'the exam is listed, so the trainee knows it was recorded');
@@ -172,19 +190,21 @@ async function sitExam(browser, who) {
     'and no error is shown for a click that should do nothing');
 
   console.log('\n=== 4. After release ===');
-  published = true;
+  const pub = await api('session_publish', { sessionCode: 'G1-9001' }, itoken);
+  ok(pub.ok, `exam published (${JSON.stringify(pub)})`);
   const p4 = await browser.newPage({ viewport: { width: 900, height: 1000 } });
   const errs4 = [];
   p4.on('pageerror', e => errs4.push(String(e)));
-  await route(p4, 'ET1000');
-  await p4.goto(BASE);
-  await p4.click('#studentModeBtn');
-  await p4.fill('#traineeLoginId', 'ET1000');
-  await p4.fill('#traineeLoginPassword', 'x');
-  await p4.click('#traineeLoginBtn');
+  await loginTrainee(p4, 'ET1000');
   await p4.waitForSelector('.attempt-row[data-attempt]');
   ok(!/Not released yet/i.test(await p4.textContent('#myHistoryBody')), 'the pending label is gone');
-  ok(/3 \/ 8/.test(await p4.textContent('#myHistoryBody')), 'the mark is shown');
+  // Was "3 / 8": the mock's my_history reply hardcoded that score regardless
+  // of what got submitted, disconnected from step 2's actual answers. Step 2
+  // always takes the correct choice for every question (that is the whole
+  // point of the check right above it, "every answer taken from the paper on
+  // screen was marked correct"), so a real backend showing 8/8 is correct,
+  // not a regression -- the mock's "3 / 8" was never true of anything.
+  ok(/8 \/ 8/.test(await p4.textContent('#myHistoryBody')), 'the mark is shown');
 
   console.log('\n=== 5. The review shows the paper as it was sat ===');
   await p4.click('.attempt-row[data-attempt] td');
@@ -205,6 +225,8 @@ async function sitExam(browser, who) {
   ok(all.length === 0, all.length ? all.join(' | ') : 'none');
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });
