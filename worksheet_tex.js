@@ -515,7 +515,7 @@ const WORKSHEET_MACHINERY = String.raw`\makeatletter
 }
 
 % #1 is the objective code and #2 the correct letter. Neither is accumulated
-% here: the key is written straight into etkey.js by the exporter, from the same
+% here: the key is written straight into etkey.js.dat by the exporter, from the same
 % list and in the same order these environments are emitted in. Letting TeX
 % collect it meant one \write per array, and \write breaks its output at
 % max_print_line -- 79 characters on a stock TeX Live. A paper long enough to
@@ -543,10 +543,15 @@ const WORKSHEET_MACHINERY = String.raw`\makeatletter
   \ws@closetext{Name}%
   \ws@closetext{Group}%
   \ws@closetext{EnergyTechID}%
-  \immediate\pdfobj stream file {etkey.js}%
+  % .dat, not .js -- MiKTeX on Windows refuses \openout on any extension
+  % listed in PATHEXT (.js included), which breaks the Download .tex
+  % fallback on a stock install; Overleaf compiles either name, so that path
+  % would keep working and hide the regression. Must match the filecontents
+  % name below, which is where this is explained again.
+  \immediate\pdfobj stream file {etkey.js.dat}%
   \immediate\pdfobj{<</S/JavaScript/JS \the\pdflastobj\space 0 R>>}%
   \edef\ws@jskey{\the\pdflastobj}%
-  \immediate\pdfobj stream file {etgrader.js}%
+  \immediate\pdfobj stream file {etgrader.js.dat}%
   \immediate\pdfobj{<</S/JavaScript/JS \the\pdflastobj\space 0 R>>}%
   \edef\ws@jslib{\the\pdflastobj}%
   \pdfnames{/JavaScript<</Names[%
@@ -689,9 +694,15 @@ function buildWorksheetTex(session, questions) {
 %  who opens the file in a text editor can read it. Do not hand this file to
 %  trainees before they have sat the paper.
 %=====================================================================
-\\begin{filecontents*}[overwrite]{etgrader.js}${WORKSHEET_GRADER_JS}\\end{filecontents*}
+%  .dat, not .js, on both files below: MiKTeX on Windows refuses \\openout on
+%  any extension listed in PATHEXT (.js included), so a stock Windows+MiKTeX
+%  install could not compile this downloaded .tex at all. Overleaf accepts
+%  either name, so that export path keeps working and would not catch a
+%  regression here. The \\pdfobj stream file {...} reads in the preamble
+%  above must be kept in sync with these names.
+\\begin{filecontents*}[overwrite]{etgrader.js.dat}${WORKSHEET_GRADER_JS}\\end{filecontents*}
 
-\\begin{filecontents*}[overwrite]{etkey.js}
+\\begin{filecontents*}[overwrite]{etkey.js.dat}
 ${keyJs}
 \\end{filecontents*}
 
