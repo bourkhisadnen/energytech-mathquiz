@@ -730,7 +730,7 @@ ${WORKSHEET_MACHINERY}
 ${header}
 %=====================================================================
 \\begin{document}
-\\begin{Form}
+\\begin{Form}[NeedAppearances=false]
 \\small
 
 {\\scriptsize\\itshape\\color{etgrey}%
