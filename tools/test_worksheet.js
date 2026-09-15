@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const APP = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed';
+const APP = path.join(__dirname, '..');
 global.window = {};
 require(APP + '/question_bank.js');
 require(APP + '/question_bank_ch03.js');
@@ -129,6 +129,24 @@ eq((built.tex.match(/\\opt\{/g) || []).length,
    five.reduce((a, q) => a + W.splitOptionList(q.choices).length, 0),
    'with one \\opt per choice, no more and no fewer');
 
+console.log('\n=== 5c. No embedded file is written under a Windows-autorun extension ===');
+// MiKTeX on Windows refuses \openout on any extension in PATHEXT -- .js
+// included -- as a guard against a .tex document dropping something Explorer
+// would double-click and run. That is exactly what etgrader.js/etkey.js were,
+// and it broke the Download .tex fallback on every stock Windows install
+// (claude/08-interactive-worksheet-export.md, "The embedded scripts are
+// .js.dat, not .js"). Overleaf compiles regardless of the extension, so that
+// path would keep working and hide the regression -- this scan of the
+// generated .tex is the only thing that catches one of the two filecontents
+// names drifting back to .js.
+const WINDOWS_AUTORUN_EXTENSIONS = ['com', 'exe', 'bat', 'cmd', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'msc'];
+const writtenFiles = [...built.tex.matchAll(/\\begin\{filecontents\*\}\[overwrite\]\{([^}]+)\}/g)].map(m => m[1]);
+ok(writtenFiles.length > 0, `the worksheet writes at least one embedded file (${writtenFiles.length})`);
+writtenFiles.forEach(name => {
+  const ext = (name.match(/\.([^.]+)$/) || [, ''])[1].toLowerCase();
+  ok(!WINDOWS_AUTORUN_EXTENSIONS.includes(ext), `${name} does not use a Windows-autorun extension (.${ext})`);
+});
+
 console.log('\n=== 6. The session is named on the paper ===');
 const named = W.buildWorksheetTex(
   Object.assign({}, SESSION, { sessionName: 'R&D review #2' }), five);
@@ -206,9 +224,19 @@ ok(whole.compiled && !whole.errors.length,
    + (whole.errors.length ? ` — ${whole.firstError.slice(0, 90)}` : ''));
 
 if (whole.compiled) {
-  const dump = execFileSync('pdftk', [path.join(whole.dir, 'worksheet.pdf'), 'dump_data_fields'],
-    { encoding: 'utf8' });
-  const names = [...dump.matchAll(/^FieldName: (.+)$/gm)].map(m => m[1]);
+  // Field-name enumeration only (no /Kids or /Rect), so pypdf's own
+  // AcroForm walk -- already used just below for the same PDF's key -- gives
+  // this the identical list pdftk's dump_data_fields would have.
+  const names = execFileSync('python3', ['-c', `
+import sys, warnings; warnings.filterwarnings('ignore')
+import pypdf
+r = pypdf.PdfReader(sys.argv[1])
+acro = r.trailer['/Root']['/AcroForm']
+print('\\n'.join(str(f.get_object().get('/T', '')) for f in acro['/Fields']))
+`, path.join(whole.dir, 'worksheet.pdf')], { encoding: 'utf8' })
+    // Python's print() translates \n to \r\n in text mode on Windows;
+    // strip it rather than let a trailing \r break the field-name match.
+    .replace(/\r/g, '').trim().split('\n').filter(Boolean);
   eq(names.filter(n => /^Q\d+$/.test(n)).length, wholeSet.length,
      'one radio group per question, in the PDF itself');
   const key = execFileSync('python3', ['-c', `
@@ -220,7 +248,7 @@ blobs = {str(names[i]): names[i+1].get_object()['/JS'].get_data().decode('latin-
          for i in range(0, len(names), 2)}
 m = re.search(r'var ANSWER = \\[(.*?)\\];', blobs['ETW01key'], re.S)
 print(','.join(re.findall(r'"(\\w)"', m.group(1))))
-`, path.join(whole.dir, 'worksheet.pdf')], { encoding: 'utf8' }).trim();
+`, path.join(whole.dir, 'worksheet.pdf')], { encoding: 'utf8' }).replace(/\r/g, '').trim();
   eq(key, wholeSet.map(q => String(q.answer).trim()).join(','),
      'and the key inside the compiled PDF is the bank key, question for question');
 }
@@ -232,7 +260,7 @@ if (whole.compiled) {
 import sys, warnings; warnings.filterwarnings('ignore')
 import pypdf
 print(len(pypdf.PdfReader(sys.argv[1]).pages))
-`, pdf], { encoding: 'utf8' }).trim());
+`, pdf], { encoding: 'utf8' }).replace(/\r/g, '').trim());
 
   // Structure: one field per name, one widget per page, and the boxes must not
   // sit on top of each other -- an annotation left outside a \makebox comes out
@@ -261,7 +289,7 @@ def overlaps(a, b):
 pairs = [(x, y) for i, x in enumerate(want) for y in want[i+1:] if x in rects and y in rects]
 print(sum(1 for x, y in pairs if overlaps(rects[x], rects[y])))
 print(int(all(rects[k][2] > rects[k][0] and rects[k][3] > rects[k][1] for k in rects)))
-`, pdf], { encoding: 'utf8' }).trim().split('\n');
+`, pdf], { encoding: 'utf8' }).replace(/\r/g, '').trim().split('\n');
 
   probe[0].split('|').forEach(part => {
     const [nm, entries, kids, type] = part.split(':');
@@ -287,7 +315,7 @@ w.write(out)
 got = pypdf.PdfReader(out).get_fields()
 print('|'.join(str(got[k].get('/V')) for k in ('Name', 'Group', 'EnergyTechID')))
 print(pypdf.PdfReader(out).trailer['/Root']['/AcroForm'].get('/NeedAppearances'))
-`, pdf, path.join(whole.dir, 'filled.pdf')], { encoding: 'utf8' }).trim().split('\n');
+`, pdf, path.join(whole.dir, 'filled.pdf')], { encoding: 'utf8' }).replace(/\r/g, '').trim().split('\n');
   eq(roundTrip[0], 'Mohammed Al-Otaibi|G1|ET1001',
      'what is typed into the header survives being saved and reopened');
   eq(roundTrip[1], 'True',
@@ -302,7 +330,7 @@ names = r.trailer['/Root']['/Names']['/JavaScript']['/Names']
 blobs = {str(names[i]): names[i+1].get_object()['/JS'].get_data().decode('latin-1')
          for i in range(0, len(names), 2)}
 print(blobs.get('ETW02lib', ''))
-`, pdf], { encoding: 'utf8' });
+`, pdf], { encoding: 'utf8' }).replace(/\r\n/g, '\n');
   const reset = (graderJs.match(/function etReset\(doc\)[\s\S]*?\n\}/) || [''])[0];
   ok(/resetForm\(fields\)/.test(reset), 'Clear all resets a named list of fields');
   ok(!/resetForm\(\s*\)/.test(reset), 'and never bare resetForm(), which would wipe the header too');

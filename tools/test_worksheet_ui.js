@@ -1,44 +1,60 @@
-/* Exporting a session as an interactive worksheet, in a real browser.
+/* Exporting a session as an interactive worksheet, in a real browser -- against
+ * the REAL energytech-api backend (Express + Postgres). Repointed for Phase 6
+ * from the mocked-Apps-Script version this file used to be; see
+ * test_roster.js's header for the shared mechanics (served from public/ via
+ * src/app.js, seeded/asserted through TEST_DATABASE_URL, never DATABASE_URL).
+ * Login is the only thing that now goes through the real backend -- paper
+ * building, scoring and worksheet export are entirely client-side (D1/D2) and
+ * the migration never touched them.
  *
  * The point of this file is the last section: the .tex the BROWSER produced is
  * written to disk and run through pdflatex. A generator tested only against its
  * own expectations proves nothing -- the thing that matters is whether the file
  * an instructor downloads actually compiles, and whether the PDF that comes out
  * marks itself with the right key. */
+const path = require('path');
 const { chromium } = require('playwright');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
 const os = require('os');
 
-const BASE = 'http://127.0.0.1:8902/energytech-mathquiz/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+const { resetDb, insertInstructor, pool } = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
 const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
 
-let overleafPosts = [];
+async function seedInstructor(username, displayName, role, password) {
+  const { passwordHash, passwordSalt, passwordAlgo } = await hashPasswordForStorage(password);
+  await insertInstructor({ username, displayName, role, passwordHash, passwordSalt, passwordAlgo });
+}
 
-function route(p) {
-  return p.route(/script\.google\.com/, r => {
-    const req = r.request();
-    if (req.method() === 'POST') return r.fulfill({ status: 200, body: 'ok' });
-    const q = Object.fromEntries(new URL(req.url()).searchParams);
-    let d = { ok: true, message: 'ok' };
-    if (q.action === 'auth_login') d = { ok: true, token: 'ADMTOK', username: 'adnen',
-      displayName: 'Adnane Khalifa', role: 'admin' };
-    if (q.action === 'admin_list_instructors') d = { ok: true, instructors: [] };
-    if (q.action === 'roster_list') d = { ok: true,
-      intakes: [{ label: 'JAN26', status: 'active' }],
-      groups: [{ intake: 'JAN26', name: 'G1', trainees: 4, withAccount: 4 }] };
-    if (q.action === 'trainee_list') d = { ok: true, trainees: [] };
-    if (q.action === 'session_list') d = { ok: true, sessions: [] };
-    if (q.action === 'session') d = { ok: true, session: { sessionCode: q.code } };
-    return r.fulfill({ status: 200, contentType: 'application/javascript',
-      body: q.callback + '(' + JSON.stringify(d) + ');' });
+// MiKTeX on Windows refuses \openout on any extension in this list -- the
+// exact reason etgrader.js/etkey.js had to become etgrader.js.dat/etkey.js.dat
+// (claude/08-interactive-worksheet-export.md, "The embedded scripts are
+// .js.dat, not .js"). Overleaf compiles either way, so nothing on that path
+// would ever catch one of the two names drifting back to a blocked extension
+// -- this scan of the actual generated .tex is the only thing that does.
+const WINDOWS_AUTORUN_EXTENSIONS = ['com', 'exe', 'bat', 'cmd', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'msc'];
+function filesWrittenByFilecontents(tex) {
+  return [...tex.matchAll(/\\begin\{filecontents\*\}\[overwrite\]\{([^}]+)\}/g)].map(m => m[1]);
+}
+function assertNoAutorunExtensions(tex, label) {
+  const written = filesWrittenByFilecontents(tex);
+  ok(written.length > 0, `${label}: writes at least one embedded file (${written.length})`);
+  written.forEach(name => {
+    const ext = (name.match(/\.([^.]+)$/) || [, ''])[1].toLowerCase();
+    ok(!WINDOWS_AUTORUN_EXTENSIONS.includes(ext),
+      `${label}: ${name} does not use a Windows-autorun extension (.${ext})`);
   });
 }
+
+let overleafPosts = [];
 
 /* Overleaf is never actually called: the form is caught here so the test can
  * read what would have been posted. Routed on the CONTEXT, not the page -- the
@@ -114,20 +130,26 @@ async function makeSession(p, { label, paperKey, count, mode, name, seed }) {
 }
 
 (async () => {
+  await resetDb();
+  await seedInstructor('adnen', 'Adnane Khalifa', 'admin', '1231234');
+
+  const server = app.listen(0);
+  const { port } = server.address();
+  const BASE = `http://127.0.0.1:${port}/index.html`;
+
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wsui-'));
-  const browser = await chromium.launch({ executablePath: EXEC });
+  const browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, acceptDownloads: true });
   const p = await ctx.newPage();
   const errs = [];
   p.on('pageerror', e => errs.push(String(e)));
   p.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
-  await route(p);
   await routeOverleaf(ctx);
 
   await p.goto(BASE);
   await p.click('#teacherModeBtn');
   await p.fill('#teacherLoginUsername', 'adnen');
-  await p.fill('#teacherLoginPassword', 'x');
+  await p.fill('#teacherLoginPassword', '1231234');
   await p.click('#teacherLoginBtn');
   await p.waitForSelector('#teacherInterface:not([hidden])');
 
@@ -198,6 +220,7 @@ async function makeSession(p, { label, paperKey, count, mode, name, seed }) {
   const texPath = path.join(tmp, 'worksheet.tex');
   await file.saveAs(texPath);
   ok(fs.statSync(texPath).size > 5000, 'and is a real file, not an empty one');
+  assertNoAutorunExtensions(fs.readFileSync(texPath, 'utf8'), 'the downloaded .tex');
 
   console.log('\n=== 7. pdflatex actually compiles what the browser produced ===');
   // The whole feature rests on this. Everything above could pass while the file
@@ -218,8 +241,20 @@ async function makeSession(p, { label, paperKey, count, mode, name, seed }) {
   ok(compiled, 'the downloaded worksheet compiles with pdflatex');
 
   if (compiled) {
-    const fieldDump = execFileSync('pdftk', [pdfPath, 'dump_data_fields'], { encoding: 'utf8' });
-    const names = [...fieldDump.matchAll(/^FieldName: (.+)$/gm)].map(m => m[1]);
+    // Field-name enumeration only (no /Kids or /Rect), so pypdf's own
+    // AcroForm walk -- already used just below for this PDF's scripts and
+    // key -- gives this the identical list pdftk's dump_data_fields would
+    // have.
+    const names = execFileSync('python3', ['-c', `
+import sys, warnings; warnings.filterwarnings('ignore')
+import pypdf
+r = pypdf.PdfReader(sys.argv[1])
+acro = r.trailer['/Root']['/AcroForm']
+print('\\n'.join(str(f.get_object().get('/T', '')) for f in acro['/Fields']))
+`, pdfPath], { encoding: 'utf8' })
+      // Python's print() translates \n to \r\n in text mode on Windows;
+      // strip it rather than let a trailing \r break the field-name match.
+      .replace(/\r/g, '').trim().split('\n').filter(Boolean);
     const radios = names.filter(n => /^Q\d+$/.test(n));
     eq(radios.length, nq, 'the PDF has one radio group per question');
     ['Total', 'Score', 'Percent', 'WrongList', 'BlankList', 'CalcBtn', 'ResetBtn'].forEach(f =>
@@ -239,7 +274,7 @@ key = blobs.get('ETW01key', '')
 letters = re.findall(r'"(\\w)"', (re.search(r'var ANSWER = \\[(.*?)\\];', key, re.S) or [None,''])[1] if re.search(r'var ANSWER = \\[(.*?)\\];', key, re.S) else '')
 print(len(blobs), ','.join(letters))
 print('etFeedback' in blobs.get('ETW02lib',''))
-`, pdfPath], { encoding: 'utf8' }).trim().split('\n');
+`, pdfPath], { encoding: 'utf8' }).replace(/\r/g, '').trim().split('\n');
     const [scriptCount, keyInPdf] = probe[0].split(' ');
     eq(Number(scriptCount), 2, 'the PDF carries both document-level scripts');
     eq(keyInPdf, onScreen, 'and the key inside the PDF is the paper the app built');
@@ -404,7 +439,9 @@ print('etFeedback' in blobs.get('ETW02lib',''))
   ok(errs.length === 0, errs.length ? errs.join(' | ') : 'none');
 
   await browser.close();
+  server.close();
+  await pool.end();
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });

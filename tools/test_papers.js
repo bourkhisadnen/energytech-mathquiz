@@ -1,12 +1,30 @@
-/* Regression cover for the parts the intake work touched indirectly: every
- * paper still builds a full quiz through the selection tree, scoring is still
- * exact at both ends, chapter-specific diagrams and videos do not leak across
- * chapters, and the instructor preview still works. Replaces test_ch03.js and
- * test_videos.js, which drove a #chapterSelect that the tree removed. */
+/* Regression cover for the parts the intake work touched indirectly -- against
+ * the REAL energytech-api backend (Express + Postgres) -- repointed for
+ * Phase 6 from the mocked-Apps-Script version this file used to be. See
+ * test_roster.js's header for the shared mechanics (served from public/ via
+ * src/app.js, seeded/asserted through TEST_DATABASE_URL, never DATABASE_URL).
+ *
+ * Every paper still builds a full quiz through the selection tree, scoring is
+ * still exact at both ends, chapter-specific diagrams and videos do not leak
+ * across chapters, and the instructor preview still works. Replaces
+ * test_ch03.js and test_videos.js, which drove a #chapterSelect that the tree
+ * removed.
+ *
+ * This is a straight repoint, not a rewrite: every UI step, selector and
+ * assertion value below is unchanged from the mocked version. Paper-building,
+ * scoring and the question banks are entirely client-side (D1/D2) and the
+ * migration never touched them -- login is the only thing that now goes
+ * through the real backend instead of a stub. */
 
+const path = require('path');
 const { chromium } = require('playwright');
-const BASE = 'http://127.0.0.1:8901/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+const { resetDb, insertInstructor, pool } = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
 
 let failures = [], checks = 0;
 function ok(cond, label) {
@@ -15,29 +33,29 @@ function ok(cond, label) {
   else { console.log('  FAIL  ' + label); failures.push(label); }
 }
 
+async function seedInstructor(username, displayName, role, password) {
+  const { passwordHash, passwordSalt, passwordAlgo } = await hashPasswordForStorage(password);
+  await insertInstructor({ username, displayName, role, passwordHash, passwordSalt, passwordAlgo });
+}
+
 (async () => {
-  const browser = await chromium.launch({ executablePath: EXEC });
+  await resetDb();
+  await seedInstructor('adnen', 'Adnane Khalifa', 'admin', '1231234');
+
+  const server = app.listen(0);
+  const { port } = server.address();
+  const BASE = `http://127.0.0.1:${port}/index.html`;
+
+  const browser = await chromium.launch();
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 
-  // The backend is never reached in this test; every call is answered locally.
-  await page.route('**/*script.google.com**', route => {
-    const req = route.request();
-    if (req.method() === 'POST') return route.fulfill({ status: 200, body: 'ok' });
-    const p = Object.fromEntries(new URL(req.url()).searchParams);
-    const data = p.action === 'auth_login'
-      ? { ok: true, token: 'T', username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin' }
-      : p.action === 'roster_list' ? { ok: true, intakes: [], groups: [] }
-      : { ok: true, message: 'mock' };
-    return route.fulfill({ status: 200, contentType: 'application/javascript', body: `${p.callback}(${JSON.stringify(data)});` });
-  });
-
   await page.goto(BASE);
   await page.click('#teacherModeBtn');
   await page.fill('#teacherLoginUsername', 'adnen');
-  await page.fill('#teacherLoginPassword', 'x');
+  await page.fill('#teacherLoginPassword', '1231234');
   await page.click('#teacherLoginBtn');
   await page.waitForSelector('#teacherInterface:not([hidden])');
 
@@ -158,6 +176,8 @@ function ok(cond, label) {
   ok(errors.length === 0, 'no console or page errors' + (errors.length ? ': ' + errors.slice(0, 3).join(' | ') : ''));
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
 })().catch(e => { console.error(e); process.exit(1); });
