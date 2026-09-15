@@ -5,13 +5,7 @@ let lastFeedback = null;
 let currentSession = null;
 let activeRole = 'teacher';
 let studentSubmitted = false;
-const DEFAULT_WEB_APP_URL = 'Search "script.google.com" (3 hits in 3 files of 696 searched) [Normal]
-  D:\OneDrive - Centre national des technologies en éducation - Ministère de l'éducation\GitHub\energytech-mathquiz\app.js (1 hit)
-	Line    8: const DEFAULT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwG6sb3Dn8MCETk5uphIZ4p6BelbLu1IgbayrpQiIKeWCumLio5roK4gpMDDOh3O_X6/exec';
-  D:\OneDrive - Centre national des technologies en éducation - Ministère de l'éducation\GitHub\energytech-mathquiz\index.html (1 hit)
-	Line 429:             <input id="webAppUrl" placeholder="https://script.google.com/macros/s/..." />
-  D:\OneDrive - Centre national des technologies en éducation - Ministère de l'éducation\GitHub\energytech-mathquiz\README.md (1 hit)
-	Line   15: https://script.google.com/macros/s/AKfycbw1sVWwd_TxFFFZGhwKQN9tI-l5ihSYcd2zjIQrivLBrHxVAtNmooUu_lPTAbrsE_OH/exec';
+const DEFAULT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwG6sb3Dn8MCETk5uphIZ4p6BelbLu1IgbayrpQiIKeWCumLio5roK4gpMDDOh3O_X6/exec';
 const WEB_APP_URL_STORAGE_KEY = 'energytechWebAppUrl_v2';
 const AUTH_TOKEN_KEY = 'energytechAuthToken_v1';
 const AUTH_USER_KEY = 'energytechAuthUser_v1';
