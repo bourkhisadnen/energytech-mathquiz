@@ -434,9 +434,17 @@ const APP_MUTANTS = [
     suite: 'test_exam_confirm.js'
   },
   {
+    // The code this guarded is still live -- submitOnlineResult still calls
+    // setExamMode(false) once the paper is handed in -- but the `from`
+    // pattern had rotted onto the COMMENT beside it, which has been rewritten
+    // twice since (Phase 5's fetch rewrite, then this migration's
+    // confirmExamRecorded-from-the-catch-branch change), most recently
+    // without anyone touching this file. Re-anchored on the call itself
+    // (6-space indent), which is unique -- the same call three thousand lines
+    // away, in the my-history "leave the exam view" path, sits at 4 spaces.
     what: 'the screen never comes back after the exam is submitted',
-    from: "      setExamMode(false);\n      // The POST is opaque (no-cors), so \"it went through\" is an assumption",
-    to:   "      // The POST is opaque (no-cors), so \"it went through\" is an assumption",
+    from: "      setExamMode(false);",
+    to:   "      if (false) setExamMode(false);",
     suite: 'test_exam_view.js'
   },
   {
