@@ -230,17 +230,24 @@ function etMastery(doc) {
             var v = etPick(doc, i);
             if (v != "Off" && v != "" && v == ANSWER[i - 1]) { ok++; }
         }
-        try {
-            if (tot == 0) {
-                f.value = "-";
-                f.fillColor = ["RGB", 0.93, 0.93, 0.93];
-            } else {
-                var r = ok / tot;
-                f.value = ok + "/" + tot + "  " + Math.round(r * 100) + "%";
-                f.fillColor = etRamp(r);
-                f.textColor = color.black;
-            }
-        } catch (e) { console.println("Mastery " + code + ": " + e); }
+        // The mark's text and its fill colour used to be written inside one try
+        // block, with the catch reporting the failure through a console that
+        // does not exist in Acrobat on Android -- that report call itself threw,
+        // escaped the catch, and killed this whole for-loop, so every mastery
+        // cell after the first stayed blank. The colour write can also throw on
+        // Android by itself. Each write now has its own guard, so one failing
+        // never suppresses the other, and nothing is reported anywhere.
+        var text, fill, black;
+        if (tot == 0) {
+            text = "-"; fill = ["RGB", 0.93, 0.93, 0.93]; black = false;
+        } else {
+            var r = ok / tot;
+            text = ok + "/" + tot + "  " + Math.round(r * 100) + "%";
+            fill = etRamp(r); black = true;
+        }
+        try { f.value = text; } catch (e) { }
+        try { f.fillColor = fill; } catch (e) { }
+        if (black) { try { f.textColor = color.black; } catch (e) { } }
     }
 }
 
