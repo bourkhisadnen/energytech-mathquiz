@@ -236,7 +236,13 @@ const CHECKS = {
   },
 
   'every question still emits four options': function (tex) {
-    const questions = tex.split(/\\setcounter\{wsopt\}\{0\}/).slice(1);
+    // Was split on \setcounter{wsopt}{0}, which only ever appears ONCE in the
+    // generated LaTeX -- inside \newenvironment{wsq}'s definition, not once
+    // per invocation. LaTeX re-runs that reset on every \begin{wsq} at compile
+    // time, but as literal text in the .tex it never repeats, so the old split
+    // lumped every question's options into one bucket. \begin{wsq} itself
+    // (one real per-question marker) is what actually recurs in the text.
+    const questions = tex.split(/\\begin\{wsq\}/).slice(1);
     assert(questions.length > 0, 'no questions found in the generated LaTeX');
     questions.forEach(function (q, i) {
       const n = (q.match(/\\opt\{/g) || []).length;

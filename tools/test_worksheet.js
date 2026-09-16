@@ -155,6 +155,19 @@ writtenFiles.forEach(name => {
   ok(!WINDOWS_AUTORUN_EXTENSIONS.includes(ext), `${name} does not use a Windows-autorun extension (.${ext})`);
 });
 
+console.log('\n=== 5d. The PDF radio group survives Acrobat on Android ===');
+// See test_worksheet_radio.js's own header for the bug these guard: every
+// widget once declared /FT/Btn on itself as well as on the parent, which
+// desktop Acrobat resolves fine and Acrobat on Android reads as four
+// independent fields instead of one radio group of four -- found only by
+// building five structurally different papers and running them on a tablet.
+const { CHECKS: RADIO_CHECKS } = require('./test_worksheet_radio.js');
+Object.keys(RADIO_CHECKS).forEach(name => {
+  let err = null;
+  try { RADIO_CHECKS[name](built.tex); } catch (e) { err = e; }
+  ok(!err, name + (err ? ` (${err.message.split('\n')[0]})` : ''));
+});
+
 console.log('\n=== 6. The session is named on the paper ===');
 const named = W.buildWorksheetTex(
   Object.assign({}, SESSION, { sessionName: 'R&D review #2' }), five);
@@ -323,8 +336,39 @@ print(pypdf.PdfReader(out).trailer['/Root']['/AcroForm'].get('/NeedAppearances')
 `, pdf, path.join(whole.dir, 'filled.pdf')).trim().split('\n');
   eq(roundTrip[0], 'Mohammed Al-Otaibi|G1|ET1001',
      'what is typed into the header survives being saved and reopened');
-  eq(roundTrip[1], 'True',
-     'and NeedAppearances is set, so a viewer draws the text it was given');
+  // Was 'True'. The Android radio-button fix (see
+  // claude/30-worksheet-radio-buttons-on-android.md) turned NeedAppearances off
+  // document-wide -- it is one flag for the whole form, with no per-field
+  // override, and the radio widgets now supply their own /AP circles that a
+  // viewer must be told to trust rather than override with a synthesized mark
+  // (which, at the widened 26bp rect and with no /MK to fall back on, landed
+  // on the option letter and left unselected options blank). hyperref omits
+  // the key entirely for false rather than writing it out, which is why pypdf
+  // reads back None here rather than the string 'False' -- the PDF spec's own
+  // default for a missing NeedAppearances is false, so the two are the same
+  // flag.
+  //
+  // The header fields lose nothing by this: giving them their own generated
+  // /AP would not fix the case NeedAppearances existed for, it would trade it
+  // for a worse one. A radio button has two fixed, known-in-advance states, so
+  // one circle drawn once and reused is correct forever. A text field's value
+  // is not known until someone fills it in, so any /AP generated at compile
+  // time can only show blank -- and unlike the radio state (/AS, updated by
+  // the viewer on every click, appearance included), nothing keeps that /AP in
+  // sync with /V afterwards. A trainee typing directly into the field is
+  // unaffected either way: every compliant viewer regenerates a text field's
+  // appearance live as part of ordinary interactive editing, independent of
+  // both NeedAppearances and whatever /AP the field started with. What
+  // actually changes is the narrower case this assertion used to check --
+  // something (a script, an import, anything other than the trainee typing)
+  // setting /V without also updating /AP. Without NeedAppearances, a viewer
+  // that never opens the field for editing may now show it blank instead of
+  // the value; a generated compile-time /AP would instead show a DIFFERENT
+  // trainee's worksheet as *someone else's* stale name, or last session's, if
+  // the .tex were ever regenerated from a cached build -- wrong is worse than
+  // blank. Blank is what NeedAppearances=false already gives for free.
+  eq(roundTrip[1], 'None',
+     'and NeedAppearances is off, for the radio buttons\' sake -- the header fields still round-trip their value (above), just not their on-screen appearance outside a viewer that actually opens the field');
 
   // Clearing the answers must not clear who you are.
   const graderJs = pyRun(`

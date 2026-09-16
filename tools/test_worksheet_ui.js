@@ -17,6 +17,7 @@ const { chromium } = require('playwright');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const { CHECKS: RADIO_CHECKS } = require('./test_worksheet_radio.js');
 
 const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
 require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
@@ -228,7 +229,19 @@ async function makeSession(p, { label, paperKey, count, mode, name, seed }) {
   const texPath = path.join(tmp, 'worksheet.tex');
   await file.saveAs(texPath);
   ok(fs.statSync(texPath).size > 5000, 'and is a real file, not an empty one');
-  assertNoAutorunExtensions(fs.readFileSync(texPath, 'utf8'), 'the downloaded .tex');
+  const downloadedTex = fs.readFileSync(texPath, 'utf8');
+  assertNoAutorunExtensions(downloadedTex, 'the downloaded .tex');
+
+  console.log('\n=== 6b. The radio group in the file the browser produced survives Acrobat on Android ===');
+  // Run against what the browser actually downloaded, not a generator built
+  // fresh in Node -- see test_worksheet_radio.js's header for the bug these
+  // guard (all four options selectable at once on Android; found by building
+  // five structurally different papers and testing them on a tablet).
+  Object.keys(RADIO_CHECKS).forEach(name => {
+    let err = null;
+    try { RADIO_CHECKS[name](downloadedTex); } catch (e) { err = e; }
+    ok(!err, name + (err ? ` (${err.message.split('\n')[0]})` : ''));
+  });
 
   console.log('\n=== 7. pdflatex actually compiles what the browser produced ===');
   // The whole feature rests on this. Everything above could pass while the file
