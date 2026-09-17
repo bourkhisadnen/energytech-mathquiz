@@ -484,14 +484,11 @@ const APP_MUTANTS = [
     suite: 'test_exam_view.js'
   },
   /* --- resetting a forgotten password, on the screen ---
-   * test_password_reset_ui.js, the suite these four name, was never actually
-   * built -- checked against this repo's full git history; there is no
-   * record of it ever existing. The behaviour below is real and still
-   * current (all four patterns still match app.js), it has simply never had
-   * anything running it. Left as-is rather than reassigned to a suite that
-   * does not cover this ground, or retired as though the behaviour were
-   * gone -- it is not. A real test_password_reset_ui.js is what closes this,
-   * not a rewrite here. */
+   * test_password_reset_ui.js, the suite these four name, was orphaned for
+   * years -- checked against this repo's full git history at the time; there
+   * was no record of it ever existing, though the behaviour was always real
+   * and current. It has been written now, against the real backend, and is
+   * in the baseline list below. */
   {
     what: 'the app opens the interface anyway, so the temporary password is enough to work with',
     from: "    if (data.mustChangePassword) {\n      if ($('teacherLoginPassword')) $('teacherLoginPassword').value = '';",
@@ -1019,13 +1016,12 @@ try {
 }
 
 /* Unlike a stale `from` (fatal -- every later result would be measuring the
- * mutant), a mutant naming a suite that does not exist on disk is a known,
- * already-documented situation (test_password_reset_ui.js: see the comment
- * above those four mutants) and stopping the whole run for it would hide
- * every other result behind it. Reported up front, not fatal, and skipped
- * below rather than let execFileSync's ENOENT be mistaken for a caught
- * mutation -- a missing suite proves nothing about the guard it was meant
- * to test. */
+ * mutant), a mutant naming a suite that does not exist on disk (this is how
+ * the four test_password_reset_ui.js mutations sat for years before that
+ * suite was written) is reported up front, not fatal -- stopping the whole
+ * run for it would hide every other result behind it -- and skipped below
+ * rather than let execFileSync's ENOENT be mistaken for a caught mutation.
+ * A missing suite proves nothing about the guard it was meant to test. */
 const missingSuites = new Set();
 {
   const allMutants = [...APP_MUTANTS, ...WS_MUTANTS, ...WS_APP_MUTANTS, ...SW_MUTANTS, ...CSS_MUTANTS];
@@ -1046,9 +1042,7 @@ console.log('baseline:');
 // by energytech-api/tests/*.test.js -- see the Phase 6 backfill commits).
 // test_exam_confirm.js was renamed test_exam_dropped_response.js when its
 // premise inverted (claude/11-exam-handed-in.md in energytech-api).
-// test_password_reset_ui.js never existed in this repo; nothing here ever
-// pointed anywhere real.
-for (const suite of ['test_shuffle.js', 'test_exam_view.js', 'test_exam_dropped_response.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js']) {
+for (const suite of ['test_shuffle.js', 'test_exam_view.js', 'test_exam_dropped_response.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js', 'test_password_reset_ui.js']) {
   try {
     execFileSync('node', [path.join(__dirname, suite)], { stdio: 'pipe' });
     console.log(`  clean   ${suite}`);
