@@ -1,4 +1,9 @@
-/* The explanation video on the question it belongs to.
+/* The explanation video on the question it belongs to, in a real browser
+ * against the REAL energytech-api backend (Express + Postgres) --
+ * repointed for Phase 6 from the mocked-Apps-Script version this file used
+ * to be. See test_roster.js's header for the shared mechanics (served from
+ * public/ via src/app.js, seeded/asserted through TEST_DATABASE_URL, never
+ * DATABASE_URL).
  *
  * The list of wrong questions under the paper has always carried the links.
  * This is the same link inside the card, so a trainee reading the question they
@@ -7,114 +12,46 @@
  *
  * Two things have to stay true, and both are the sort that break quietly: the
  * link on a card must be the link for THAT question, and no video may appear on
- * an exam, where the marking itself is withheld. */
+ * an exam, where the marking itself is withheld.
+ *
+ * This is a straight repoint, not a rewrite, with one real simplification: the
+ * mock fabricated a whole `my_attempt` reply (REVIEW_ATTEMPT/REVIEW_ITEMS) to
+ * answer the "once released" review with, entirely disconnected from what step
+ * 10 actually submitted -- it could do that because nothing was real. Here the
+ * review is whatever the real backend actually recorded, so step 10 answers
+ * the exam wrong on the SAME questions the review is later checked against
+ * (the full WRONG set, not just its first three), rather than reconstructing a
+ * fake attempt to match a review that was never really sat. Nothing about what
+ * is being checked changes; only where the "wrong questions" list comes from
+ * does -- a real submission instead of a canned reply. */
+
+const path = require('path');
 const { chromium } = require('playwright');
-const BASE = 'http://127.0.0.1:8902/energytech-mathquiz/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+const {
+  pool, resetDb, insertInstructor, insertIntake, insertGroup, insertTrainee, issueInstructorToken,
+} = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
 const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
 
-/* The whole Chapters 01 & 02 original paper in its printed order, so question N
- * on screen is original question N -- and so the seven questions that carry no
- * QR code (Q58, Q81-83, Q88-90) are on the paper and can be got wrong. */
-const COMMON = {
-  intake: 'JAN26', group: 'G1', questionSet: 'Chapters 01 & 02',
-  questionSetKey: 'ch12:original_pdf', seed: 'S', questionCount: 114,
-  orderMode: 'original', showOriginalNumbers: true, requireAll: false,
-  allowWalkIn: false
-};
-const PRACTICE = Object.assign({ sessionCode: 'G1-7001', sessionName: 'Week 3 practice',
-  mode: 'practice', shuffleEachLaunch: false }, COMMON);
-const EXAM = Object.assign({ sessionCode: 'G1-9001', sessionName: 'Midterm exam',
-  mode: 'assessment', shuffleEachLaunch: false }, COMMON);
-
 const NO_VIDEO = [58, 81, 82, 83, 88, 89, 90];   // no QR code on the worksheet
+// The exam is answered wrong on the same set the practice paper is, so the
+// review checked in step 12 has something real to show for REVIEW_WRONG.
+const WRONG = [1, 2, 3].concat(NO_VIDEO);
 
-/* The paper the trainee gets back once the instructor releases the exam. Asking
- * for the whole set in its printed order makes it independent of the seed:
- * question N is original question N, so the answers can be worked out here
- * without reimplementing the draw. */
-const APP_DIR = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed';
-global.window = {};
-require(APP_DIR + '/question_bank.js');
-const CH12 = window.QUESTION_BANK_SETS.original_pdf.questions
-  .slice().sort((a, b) => a.original_number - b.original_number);
-
-const REVIEW_WRONG = [1, 2, 3].concat(NO_VIDEO);
-const REVIEW_ITEMS = CH12.map((q, i) => {
-  const wrong = REVIEW_WRONG.indexOf(q.original_number) !== -1;
-  return {
-    quizNumber: i + 1, originalNumber: q.original_number, lesson: q.lesson,
-    correctAnswer: q.answer,
-    answer: wrong ? ['a', 'b', 'c', 'd'].find(L => L !== q.answer) : q.answer,
-    result: wrong ? 'wrong' : 'correct'
-  };
-});
-const REVIEW_ATTEMPT = {
-  attemptId: 'E1', timestamp: '2026-09-01T09:00:00Z', name: 'Mohammed Al-Otaibi',
-  energytechId: 'ET1000', group: 'G1', sessionCode: 'G1-9001', sessionName: 'Midterm exam',
-  mode: 'assessment', questionSet: 'Chapters 01 & 02', questionSetKey: 'ch12:original_pdf',
-  seed: 'S', questionCount: 114, orderMode: 'original', orderSeed: '',
-  score: 104, total: 114, percent: 91
-};
-
-/* The instructor has not released the exam until this is flipped, and until
- * then the backend refuses the attempt outright. */
-let released = false;
-
-let sat = 0;
-
-function route(p) {
-  return p.route(/script\.google\.com/, r => {
-    const req = r.request();
-    if (req.method() === 'POST') {
-      try {
-        const b = JSON.parse(req.postData() || '{}');
-        if (b.type === 'quiz_attempt' && b.quiz.mode === 'assessment') sat++;
-      } catch { /* opaque */ }
-      return r.fulfill({ status: 200, body: 'ok' });
-    }
-    const q = Object.fromEntries(new URL(req.url()).searchParams);
-    let d = { ok: true, message: 'ok' };
-    if (q.action === 'session') {
-      // An instructor-created code is echoed back so the save verifies at once
-      // instead of retrying for five seconds.
-      const s = q.code === 'G1-9001' ? EXAM
-        : q.code === 'G1-7001' ? PRACTICE
-        : Object.assign({}, PRACTICE, { sessionCode: q.code });
-      d = { ok: true, session: s,
-        sitting: q.token ? { sat, allowed: 1, maySit: s.mode === 'assessment' ? sat < 1 : true } : null };
-    }
-    if (q.action === 'trainee_login') d = { ok: true, token: 'TTOK',
-      trainee: { energytechId: 'ET1000', name: 'Mohammed Al-Otaibi', intake: 'JAN26', group: 'G1', accountStatus: 'active' } };
-    if (q.action === 'auth_login') d = { ok: true, token: 'ADMTOK', username: 'adnen',
-      displayName: 'Adnane Khalifa', role: 'admin' };
-    if (q.action === 'admin_list_instructors') d = { ok: true, instructors: [] };
-    if (q.action === 'roster_list') d = { ok: true, intakes: [{ label: 'JAN26', status: 'active' }],
-      groups: [{ intake: 'JAN26', name: 'G1', trainees: 4, withAccount: 4 }] };
-    if (q.action === 'trainee_list') d = { ok: true, trainees: [] };
-    if (q.action === 'session_list') d = { ok: true, sessions: [] };
-    if (q.action === 'my_history') d = { ok: true,
-      trainee: { energytechId: 'ET1000', name: 'Mohammed Al-Otaibi' }, lessons: [],
-      attempts: [Object.assign({ registered: 'yes', released: released },
-        released ? REVIEW_ATTEMPT
-                 : { attemptId: '', timestamp: REVIEW_ATTEMPT.timestamp,
-                     sessionCode: 'G1-9001', sessionName: 'Midterm exam', mode: 'assessment',
-                     questionSet: 'Chapters 01 & 02', questionSetKey: '', seed: '',
-                     questionCount: 114, orderMode: '', orderSeed: '',
-                     score: null, total: null, percent: null })] };
-    // The real backend refuses an attempt whose exam is still held back, and so
-    // does this: a mock that answered anyway would let a client bug through.
-    if (q.action === 'my_attempt') {
-      d = released
-        ? { ok: true, attempt: REVIEW_ATTEMPT, items: REVIEW_ITEMS }
-        : { ok: false, error: 'Your instructor has not released the results of this exam yet.' };
-    }
-    return r.fulfill({ status: 200, contentType: 'application/javascript',
-      body: q.callback + '(' + JSON.stringify(d) + ');' });
-  });
+let BASE, API_URL;
+async function api(action, params, token) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(API_URL, { method: 'POST', headers, body: JSON.stringify({ action, ...params }) });
+  return res.json();
 }
 
 /* Answer every question, deliberately wrong on the ones named. */
@@ -143,16 +80,56 @@ const cardVideos = p => p.evaluate(() => {
 async function load(p, code) {
   await p.fill('#studentSessionCode', code);
   await p.click('#loadTraineeSessionBtn');
-  await p.waitForTimeout(700);
+  // Both G1-7001 and G1-9001 draw the same 114-question paper, so a card
+  // already on screen from the session sat before this one satisfies a bare
+  // ".question-card" wait before the new session has actually come back --
+  // this waits for the session fetch itself to land first.
+  await p.waitForFunction(c => typeof currentSession !== 'undefined' && currentSession && currentSession.sessionCode === c,
+    code, { timeout: 15000 });
+  await p.waitForSelector('.question-card');
 }
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: EXEC });
+  await resetDb();
+
+  const adnenPw = await hashPasswordForStorage('x');
+  await insertInstructor({ username: 'adnen', displayName: 'Adnane Khalifa', role: 'instructor',
+    passwordHash: adnenPw.passwordHash, passwordSalt: adnenPw.passwordSalt, passwordAlgo: adnenPw.passwordAlgo });
+  const itoken = await issueInstructorToken('adnen');
+  const intakeId = await insertIntake('JAN26');
+  const groupId = await insertGroup(intakeId, 'G1');
+  const traineePw = await hashPasswordForStorage('x');
+  await insertTrainee({
+    energytechId: 'ET1000', name: 'Mohammed Al-Otaibi', intakeId, groupId, accountStatus: 'active',
+    passwordHash: traineePw.passwordHash, passwordSalt: traineePw.passwordSalt, passwordAlgo: traineePw.passwordAlgo,
+  });
+
+  const server = app.listen(0);
+  const { port } = server.address();
+  BASE = `http://127.0.0.1:${port}/index.html`;
+  API_URL = `http://127.0.0.1:${port}/api/call`;
+
+  /* The whole Chapters 01 & 02 original paper in its printed order, so
+   * question N on screen is original question N -- and so the seven questions
+   * that carry no QR code (Q58, Q81-83, Q88-90) are on the paper and can be
+   * got wrong. */
+  const COMMON = {
+    intake: 'JAN26', group: 'G1', questionSet: 'Chapters 01 & 02',
+    questionSetKey: 'ch12:original_pdf', seed: 'S', questionCount: 114,
+    orderMode: 'original', showOriginalNumbers: true, requireAll: false, allowWalkIn: false,
+  };
+  const practice = await api('quiz_session', Object.assign({ sessionCode: 'G1-7001', sessionName: 'Week 3 practice',
+    mode: 'practice', shuffleEachLaunch: false }, COMMON), itoken);
+  if (!practice.ok) { console.error('FATAL: could not create the practice session', practice); process.exit(1); }
+  const exam = await api('quiz_session', Object.assign({ sessionCode: 'G1-9001', sessionName: 'Midterm exam',
+    mode: 'assessment', shuffleEachLaunch: false }, COMMON), itoken);
+  if (!exam.ok) { console.error('FATAL: could not create the exam session', exam); process.exit(1); }
+
+  const browser = await chromium.launch();
   const p = await browser.newPage({ viewport: { width: 1100, height: 1200 } });
   const errs = [];
   p.on('pageerror', e => errs.push(String(e)));
   p.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
-  await route(p);
 
   await p.goto(BASE);
   await p.click('#studentModeBtn');
@@ -163,7 +140,6 @@ async function load(p, code) {
 
   console.log('\n=== 1. Nothing before the paper is marked ===');
   await load(p, 'G1-7001');
-  await p.waitForSelector('.question-card');
   eq(await p.evaluate(() => currentQuiz.length), 114, 'the whole paper is drawn');
   eq(await p.evaluate(() => currentQuiz.map(q => q.original_number).join() ===
        currentQuiz.map((_, i) => i + 1).join()), true, 'in its printed order');
@@ -172,11 +148,15 @@ async function load(p, code) {
 
   console.log('\n=== 2. Submitting puts the video on the questions they missed ===');
   // Three ordinary wrong answers, plus every question that has no QR code.
-  const WRONG = [1, 2, 3].concat(NO_VIDEO);
   await answer(p, WRONG);
   await p.click('#studentSubmitBtn');
   await p.waitForSelector('.question-card.flag-wrong');
-  await p.waitForTimeout(400);
+  // calculateScore flags the cards synchronously, but submitOnlineResult then
+  // shows "Submitting result..." until the real POST resolves and rewrites
+  // the feedback with the actual pill list -- the mock had none of that
+  // latency, so this waits for the real round trip rather than a fixed delay.
+  await p.waitForFunction(() => !/Submitting result/.test(document.getElementById('studentFeedback').textContent),
+    null, { timeout: 15000 });
   const onCards = await cardVideos(p);
   eq(Object.keys(onCards).map(Number).sort((a, b) => a - b), [1, 2, 3],
     'a link on each wrong question that has a video, and on no other');
@@ -264,10 +244,10 @@ async function load(p, code) {
   // The marking is withheld on an exam, and the video is part of the marking:
   // it names the method for a question the trainee is being scored on.
   await load(p, 'G1-9001');
-  await p.waitForSelector('.question-card');
-  await answer(p, [1, 2, 3]);
+  await answer(p, WRONG);
   await p.click('#studentSubmitBtn');
-  await p.waitForTimeout(1200);
+  await p.waitForFunction(() => !/Submitting result/.test(document.getElementById('studentFeedback').textContent),
+    null, { timeout: 15000 });
   eq(await p.$$eval('.card-video', n => n.length), 0, 'no video on any card after an exam is handed in');
   const fb = (await p.textContent('#studentFeedback')).replace(/\s+/g, ' ');
   ok(!/youtube/i.test(fb), 'and none in the feedback either');
@@ -281,17 +261,30 @@ async function load(p, code) {
   await p.waitForSelector('#traineeHomePanel:not([hidden])');
   await p.waitForSelector('#myHistoryBody .history-table');
   ok(Boolean(await p.$('#myHistoryBody .pending-tag')), 'the exam is listed as not released yet');
-  eq(await p.$$eval('#myHistoryBody .attempt-row[data-attempt]', n => n.length), 0,
-    'and the row cannot be opened at all');
+  // The practice attempt from steps 2-9 is on the same list and is always
+  // openable -- only the EXAM's own row is what step 11 is about.
+  const examRowOpenable = await p.evaluate(() => {
+    const row = [...document.querySelectorAll('#myHistoryBody .attempt-row')]
+      .find(r => r.textContent.includes('Midterm exam'));
+    return row ? row.hasAttribute('data-attempt') && row.getAttribute('data-attempt') !== '' : null;
+  });
+  eq(examRowOpenable, false, 'and the exam row cannot be opened at all');
 
   console.log('\n=== 12. Once released, the review carries the videos ===');
-  released = true;
+  const published = await api('session_publish', { sessionCode: 'G1-9001' }, itoken);
+  ok(published.ok, `exam published (${JSON.stringify(published)})`);
   await p.click('#myHistoryRefreshBtn');
   await p.waitForSelector('#myHistoryBody .attempt-row[data-attempt]');
-  await p.click('#myHistoryBody .attempt-row[data-attempt]');
+  // Two attempts are on the list now (the practice one from steps 2-9 too) --
+  // the exam's own row is the one this step opens.
+  await p.evaluate(() => {
+    const row = [...document.querySelectorAll('#myHistoryBody .attempt-row[data-attempt]')]
+      .find(r => r.textContent.includes('Midterm exam'));
+    if (row) row.click();
+  });
   await p.waitForSelector('.review-card');
   eq(await p.$$eval('.review-card', n => n.length), 114, 'every question of the paper is shown back');
-  eq(await p.$$eval('.review-card.wrong', n => n.length), REVIEW_WRONG.length,
+  eq(await p.$$eval('.review-card.wrong', n => n.length), WRONG.length,
     'with the ones they got wrong marked as such');
 
   const reviewLinks = await p.evaluate(() => {
@@ -367,10 +360,10 @@ async function load(p, code) {
     }));
   };
 
-  const exam = await preview('assessment');
-  ok(exam.wrong > 0, `the exam preview is marked (${exam.wrong} wrong)`);
-  eq(exam.cards, 0, 'and carries no video on any card');
-  eq(exam.pills, 0, 'nor in the list underneath');
+  const examPreview = await preview('assessment');
+  ok(examPreview.wrong > 0, `the exam preview is marked (${examPreview.wrong} wrong)`);
+  eq(examPreview.cards, 0, 'and carries no video on any card');
+  eq(examPreview.pills, 0, 'nor in the list underneath');
 
   const prac = await preview('practice');
   ok(prac.wrong > 0, `a practice preview is marked too (${prac.wrong} wrong)`);
@@ -381,6 +374,8 @@ async function load(p, code) {
   ok(errs.length === 0, errs.length ? errs.slice(0, 3).join(' | ') : 'none');
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });

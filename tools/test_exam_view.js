@@ -1,56 +1,64 @@
-/* The page a trainee sees while sitting an exam.
+/* The page a trainee sees while sitting an exam, in a real browser against
+ * the REAL energytech-api backend (Express + Postgres) -- repointed for
+ * Phase 6 from the mocked-Apps-Script version this file used to be. See
+ * test_roster.js's header for the shared mechanics (served from public/ via
+ * src/app.js, seeded/asserted through TEST_DATABASE_URL, never DATABASE_URL).
  *
  * Two things are being checked. The first is that the screen is cleared to just
  * the paper and a strip saying whose it is. The second matters more: nothing on
- * that screen may hand them the answers -- and one thing used to. */
+ * that screen may hand them the answers -- and one thing used to.
+ *
+ * This is a straight repoint, not a rewrite: every UI step, selector and
+ * assertion value below is unchanged from the mocked version except where the
+ * mock's own bookkeeping (a `posted` counter incremented from an intercepted
+ * script.google.com POST, a fixed 1800/2600ms wait standing in for the old
+ * Apps Script round trip) is replaced with the real thing it was standing in
+ * for: a row in Postgres, and confirmExamRecorded's own real network read,
+ * waited for instead of guessed at. */
+
+const path = require('path');
 const { chromium } = require('playwright');
-const BASE = 'http://127.0.0.1:8902/energytech-mathquiz/index.html';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+const {
+  pool, resetDb, insertInstructor, insertIntake, insertGroup, insertTrainee, issueInstructorToken,
+} = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
 const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
 
-const COMMON = {
-  intake: 'JAN26', group: 'G1', questionSet: 'Chapters 01 & 02',
-  questionSetKey: 'ch12:original_pdf', seed: 'S', questionCount: 4,
-  orderMode: 'original', showOriginalNumbers: true, requireAll: true, allowWalkIn: false
-};
-const EXAM = Object.assign({ sessionCode: 'G1-9001', sessionName: 'Midterm exam',
-  mode: 'assessment', shuffleEachLaunch: true }, COMMON);
-const PRACTICE = Object.assign({ sessionCode: 'G1-7001', sessionName: 'Week 3 practice',
-  mode: 'practice', shuffleEachLaunch: false }, COMMON);
+const TRAINEE_PASSWORD = 'x';
 
-let sat = 0, posted = 0;
+let BASE, API_URL;
+async function api(action, params, token) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(API_URL, { method: 'POST', headers, body: JSON.stringify({ action, ...params }) });
+  return res.json();
+}
 
-function route(p) {
-  return p.route(/script\.google\.com/, r => {
-    const req = r.request();
-    if (req.method() === 'POST') {
-      try {
-        const body = JSON.parse(req.postData() || '{}');
-        if (body.type === 'quiz_attempt') {
-          posted++;
-          // The real backend refuses a second sitting and writes nothing.
-          if (body.quiz.mode === 'assessment' && sat < 1) sat++;
-        }
-      } catch { /* opaque */ }
-      return r.fulfill({ status: 200, body: 'ok' });
-    }
-    const q = Object.fromEntries(new URL(req.url()).searchParams);
-    let d = { ok: true, message: 'ok' };
-    if (q.action === 'session') {
-      const s = q.code === 'G1-7001' ? PRACTICE : EXAM;
-      d = { ok: true, session: s,
-        sitting: q.token ? { sat, allowed: 1, maySit: s.mode === 'assessment' ? sat < 1 : true } : null };
-    }
-    if (q.action === 'trainee_login') d = { ok: true, token: 'TTOK',
-      trainee: { energytechId: 'ET1000', name: 'Mohammed Abdullah Saleh Al-Otaibi',
-                 intake: 'JAN26', group: 'G1', accountStatus: 'active' } };
-    if (q.action === 'my_history') d = { ok: true,
-      trainee: { energytechId: 'ET1000', name: 'Mohammed Abdullah Saleh Al-Otaibi' },
-      attempts: [], lessons: [] };
-    return r.fulfill({ status: 200, contentType: 'application/javascript', body: q.callback + '(' + JSON.stringify(d) + ');' });
-  });
+async function attemptCount(sessionCode, energytechId) {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM attempts WHERE session_code = $1 AND energytech_id = $2`,
+    [sessionCode, energytechId]
+  );
+  return rows[0].n;
+}
+// Real submit = network round trip + Postgres write, not the mocked
+// backend's synchronous in-memory push -- see test_roster.js's own note.
+async function waitForAttempt(sessionCode, energytechId, timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const n = await attemptCount(sessionCode, energytechId);
+    if (n > 0) return n;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return 0;
 }
 
 const visible = (p, sel) => p.evaluate(s => {
@@ -59,17 +67,44 @@ const visible = (p, sel) => p.evaluate(s => {
 }, sel);
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+  await resetDb();
+  await insertInstructor({ username: 'owner1', displayName: 'Owner One', role: 'instructor' });
+  const itoken = await issueInstructorToken('owner1');
+  const intakeId = await insertIntake('JAN26');
+  const groupId = await insertGroup(intakeId, 'G1');
+  const { passwordHash, passwordSalt, passwordAlgo } = await hashPasswordForStorage(TRAINEE_PASSWORD);
+  await insertTrainee({
+    energytechId: 'ET1000', name: 'Mohammed Abdullah Saleh Al-Otaibi', intakeId, groupId,
+    accountStatus: 'active', passwordHash, passwordSalt, passwordAlgo,
+  });
+
+  const server = app.listen(0);
+  const { port } = server.address();
+  BASE = `http://127.0.0.1:${port}/index.html`;
+  API_URL = `http://127.0.0.1:${port}/api/call`;
+
+  const COMMON = {
+    intake: 'JAN26', group: 'G1', questionSet: 'Chapters 01 & 02',
+    questionSetKey: 'ch12:original_pdf', seed: 'S', questionCount: 4,
+    orderMode: 'original', showOriginalNumbers: true, requireAll: true, allowWalkIn: false
+  };
+  const exam = await api('quiz_session', Object.assign({ sessionCode: 'G1-9001', sessionName: 'Midterm exam',
+    mode: 'assessment', shuffleEachLaunch: true }, COMMON), itoken);
+  if (!exam.ok) { console.error('FATAL: could not create the exam session', exam); process.exit(1); }
+  const practice = await api('quiz_session', Object.assign({ sessionCode: 'G1-7001', sessionName: 'Week 3 practice',
+    mode: 'practice', shuffleEachLaunch: false }, COMMON), itoken);
+  if (!practice.ok) { console.error('FATAL: could not create the practice session', practice); process.exit(1); }
+
+  const browser = await chromium.launch();
   const p = await browser.newPage({ viewport: { width: 1000, height: 1000 } });
   const errs = [];
   p.on('pageerror', e => errs.push(String(e)));
   p.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
-  await route(p);
 
   await p.goto(BASE);
   await p.click('#studentModeBtn');
   await p.fill('#traineeLoginId', 'ET1000');
-  await p.fill('#traineeLoginPassword', 'x');
+  await p.fill('#traineeLoginPassword', TRAINEE_PASSWORD);
   await p.click('#traineeLoginBtn');
   await p.waitForSelector('#traineeHomePanel:not([hidden])');
 
@@ -147,7 +182,9 @@ const visible = (p, sel) => p.evaluate(s => {
 
   console.log('\n=== 6. Submitting gives the screen back ===');
   await p.click('#studentSubmitBtn');
-  await p.waitForTimeout(600);
+  const attempted = await waitForAttempt('G1-9001', 'ET1000');
+  ok(attempted > 0, 'the attempt reached the database');
+  await p.waitForFunction(() => !document.body.classList.contains('exam-mode'), null, { timeout: 5000 });
   ok(!(await p.evaluate(() => document.body.classList.contains('exam-mode'))), 'exam mode is over');
   ok(await visible(p, '#traineeHomePanel'), 'the home panel is back');
   ok(await visible(p, '.header-actions'), 'and the header buttons');
@@ -199,15 +236,19 @@ const visible = (p, sel) => p.evaluate(s => {
   });
   ok(cleared.stillSubmitted, 'clearAnswers does not un-submit an exam');
   ok(/handed in/i.test(cleared.msg), 'and says the exam has been handed in');
-  const before = posted;
+  const before = await attemptCount('G1-9001', 'ET1000');
   await p.evaluate(() => submitOnlineResult('student'));
   await p.waitForTimeout(500);
-  eq(posted, before, 'and a second submit sends nothing');
+  eq(await attemptCount('G1-9001', 'ET1000'), before, 'and a second submit sends nothing');
 
   console.log('\n=== 6d. The confirmation is checked, not assumed ===');
-  // The POST is opaque, so "submitted successfully" is a guess until the record
-  // is read back. Here the write did happen, so the trainee is told so.
-  await p.waitForTimeout(2600);
+  // The write is confirmed by a second, real read -- fetchSessionByCode over
+  // the network -- not assumed from the submit response alone. It is fired
+  // without being awaited (submitOnlineResult intentionally does not block the
+  // screen coming back on it), so this waits for the message rather than
+  // guessing how long the round trip takes.
+  await p.waitForFunction(() => /Recorded\./.test(document.getElementById('studentFeedback').textContent),
+    null, { timeout: 10000 });
   const msg = (await p.textContent('#studentFeedback')).replace(/\s+/g, ' ');
   ok(/Recorded\./.test(msg), `the app confirms it read the record back (got "${msg.slice(0, 90)}")`);
   ok(!/may not have been recorded/i.test(msg), 'and does not warn, because it did register');
@@ -230,7 +271,7 @@ const visible = (p, sel) => p.evaluate(s => {
   // mark a paper the trainee is still working on. This is what keeps that fix
   // honest now that the exam path returns before ever reaching it.
   await p.click('#card-0 input');
-  const practice = await p.evaluate(() => {
+  const practiceDl = await p.evaluate(() => {
     const rc = URL.createObjectURL, rk = HTMLAnchorElement.prototype.click;
     let blob = null;
     URL.createObjectURL = b => { blob = b; return 'blob:x'; };
@@ -243,14 +284,16 @@ const visible = (p, sel) => p.evaluate(s => {
       flagged: document.querySelectorAll('.question-card.flag-correct, .question-card.flag-wrong, .question-card.flag-unanswered').length
     };
   });
-  ok(practice.gotFile, 'a practice result does download');
-  eq(practice.marked, 0, 'without marking the correct choice on the paper');
-  eq(practice.flagged, 0, 'and without flagging any card right, wrong or unanswered');
+  ok(practiceDl.gotFile, 'a practice result does download');
+  eq(practiceDl.marked, 0, 'without marking the correct choice on the paper');
+  eq(practiceDl.flagged, 0, 'and without flagging any card right, wrong or unanswered');
 
   console.log('\n=== 8. No page errors ===');
   ok(errs.length === 0, errs.length ? errs.join(' | ') : 'none');
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });
