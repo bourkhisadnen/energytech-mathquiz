@@ -167,8 +167,20 @@ function etFmt(a) {
     return s.join(",  ");
 }
 
+// The one place doc.getField is called in this script. Guarded because
+// getField is now a suspect, not because it is confirmed broken: "Clear all"
+// clears only the first mastery cell even with every property write below it
+// already in its own try/catch (see etClearMastery), which means something
+// upstream of those writes is what is actually dying. getField is the one
+// remaining call in that loop that was not itself guarded. A field that
+// cannot be found this way is treated exactly like one that does not exist,
+// which is what every caller here already handles.
+function etField(doc, name) {
+    try { return doc.getField(name); } catch (e) { return null; }
+}
+
 function etPick(doc, i) {
-    var f = doc.getField("Q" + i);
+    var f = etField(doc, "Q" + i);
     if (f == null) { return "Off"; }
     var v = f.value;
     if (v == null) { return "Off"; }
@@ -221,7 +233,7 @@ function etMastery(doc) {
     for (var k = 0; k < OBJROW.length; k++) {
         var code = OBJROW[k];
         if (code == "") { continue; }
-        var f = doc.getField("M" + (k + 1));
+        var f = etField(doc, "M" + (k + 1));
         if (f == null) { continue; }
         var tot = 0, ok = 0;
         for (var i = 1; i <= NQ; i++) {
@@ -234,28 +246,48 @@ function etMastery(doc) {
         // block, with the catch reporting the failure through a console that
         // does not exist in Acrobat on Android -- that report call itself threw,
         // escaped the catch, and killed this whole for-loop, so every mastery
-        // cell after the first stayed blank. The colour write can also throw on
-        // Android by itself. Each write now has its own guard, so one failing
-        // never suppresses the other, and nothing is reported anywhere.
-        var text, fill, black;
+        // cell after the first stayed blank.
+        //
+        // On device since: value writes render correctly (here and in
+        // etScore), but neither fillColor nor strokeColor do -- confirmed as a
+        // standing result, not chased further. \objcell's compiled-in
+        // background (backgroundcolor=black!7) and border (bordercolor=
+        // black!50) are what the trainee actually sees; the calls below are
+        // kept, guarded, for viewers (desktop Acrobat) where they do work.
+        // The text is not a fallback for that -- it was always the real
+        // signal: red-to-green alone tells a colour-blind trainee nothing,
+        // device bug or not, so the number is in the cell regardless of
+        // whether either colour call above it lands.
+        var text, fill;
         if (tot == 0) {
-            text = "-"; fill = ["RGB", 0.93, 0.93, 0.93]; black = false;
+            text = "-"; fill = ["RGB", 0.93, 0.93, 0.93];
         } else {
             var r = ok / tot;
             text = ok + "/" + tot + "  " + Math.round(r * 100) + "%";
-            fill = etRamp(r); black = true;
+            fill = etRamp(r);
         }
         try { f.value = text; } catch (e) { }
         try { f.fillColor = fill; } catch (e) { }
-        if (black) { try { f.textColor = color.black; } catch (e) { } }
+        try { f.strokeColor = fill; } catch (e) { }
+        try { f.textColor = color.black; } catch (e) { }
     }
 }
 
 function etClearMastery(doc) {
     for (var k = 0; k < OBJROW.length; k++) {
         if (OBJROW[k] == "") { continue; }
-        var f = doc.getField("M" + (k + 1));
-        if (f != null) { f.value = ""; f.fillColor = ["RGB", 0.93, 0.93, 0.93]; }
+        var f = etField(doc, "M" + (k + 1));
+        if (f == null) { continue; }
+        // Guarding these four writes separately did NOT fix "Clear all"
+        // stopping after the first cell -- so the earlier diagnosis (one of
+        // these throwing and killing the loop) was wrong. getField above is
+        // the one call in this loop that was still unguarded before etField
+        // existed; see its own comment for why it is the current suspect.
+        try { f.value = ""; } catch (e) { }
+        try { f.fillColor = ["RGB", 0.93, 0.93, 0.93]; } catch (e) { }
+        // \objcell's compiled-in bordercolor=black!50.
+        try { f.strokeColor = ["RGB", 0.5, 0.5, 0.5]; } catch (e) { }
+        try { f.textColor = color.black; } catch (e) { }
     }
 }
 
@@ -263,6 +295,17 @@ function etClearMastery(doc) {
 // calling resetForm() bare, because a bare reset also empties the name, group
 // and ID in the header -- and someone who wants another go at the questions has
 // not stopped being themselves.
+//
+// etClearMastery runs BEFORE resetForm, not after. On a real device "Clear
+// all" was only ever clearing the first mastery cell, and neither guarding
+// every property write in that loop nor routing its field lookups through a
+// safe wrapper changed that (etField above) -- ruling both out, since a
+// second scoring run proved doc.getField itself is fine even on a field
+// script has already written to once. The one thing left that etClearMastery
+// does differently from a working etMastery run is execute in the same
+// action as a doc.resetForm() call, immediately after it. This ordering is
+// the untried variable: mastery cleared first, reset second, so nothing
+// about resetForm's own aftermath runs before the mastery loop gets to it.
 function etReset(doc) {
     var fields = [];
     for (var i = 1; i <= NQ; i++) { fields.push("Q" + i); }
@@ -271,8 +314,8 @@ function etReset(doc) {
     fields.push("Percent");
     fields.push("WrongList");
     fields.push("BlankList");
-    doc.resetForm(fields);
     etClearMastery(doc);
+    doc.resetForm(fields);
 }
 `;
 

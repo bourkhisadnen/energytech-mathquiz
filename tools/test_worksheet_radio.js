@@ -64,6 +64,20 @@ function annotDims(widget) {
   };
 }
 
+function graderJs(tex) {
+  const m = tex.match(
+    /\\begin\{filecontents\*\}\[overwrite\]\{etgrader\.js\.dat\}([\s\S]*?)\\end\{filecontents\*\}/
+  );
+  assert(m, 'the etgrader.js.dat block was not found in the generated LaTeX');
+  return m[1];
+}
+
+function fnBody(js, name) {
+  const m = js.match(new RegExp('function\\s+' + name + '\\s*\\([\\s\\S]*?\\n\\}'));
+  assert(m, name + ' not found in the grader script');
+  return m[0];
+}
+
 function appearanceBBoxes(tex) {
   const out = [];
   const re = /\/Type\/XObject\/Subtype\/Form\/BBox\[([\d.\s]+)\]/g;
@@ -188,11 +202,8 @@ const CHECKS = {
   },
 
   'the grader script never references console': function (tex) {
-    const m = tex.match(
-      /\\begin\{filecontents\*\}\[overwrite\]\{etgrader\.js\.dat\}([\s\S]*?)\\end\{filecontents\*\}/
-    );
-    assert(m, 'the etgrader.js.dat block was not found in the generated LaTeX');
-    const hit = m[1].match(/^.*\bconsole\s*\..*$/m);
+    const js = graderJs(tex);
+    const hit = js.match(/^.*\bconsole\s*\..*$/m);
     assert(
       !hit,
       'the grader script references console: ' + (hit ? hit[0].trim() : '') +
@@ -204,21 +215,69 @@ const CHECKS = {
   },
 
   'mastery colour is guarded separately from the mastery value': function (tex) {
-    const m = tex.match(
-      /\\begin\{filecontents\*\}\[overwrite\]\{etgrader\.js\.dat\}([\s\S]*?)\\end\{filecontents\*\}/
-    );
-    assert(m, 'the etgrader.js.dat block was not found in the generated LaTeX');
-    const fn = m[1].match(/function\s+etMastery\s*\([\s\S]*?\n\}/);
-    assert(fn, 'etMastery not found in the grader script');
-    const valueIdx = fn[0].indexOf('f.value');
-    const colourIdx = fn[0].indexOf('f.fillColor');
+    const fn = fnBody(graderJs(tex), 'etMastery');
+    const valueIdx = fn.indexOf('f.value');
+    const colourIdx = fn.indexOf('f.fillColor');
     assert(valueIdx !== -1 && colourIdx !== -1, 'etMastery no longer sets both value and fillColor');
-    const between = fn[0].slice(valueIdx, colourIdx);
+    const between = fn.slice(valueIdx, colourIdx);
     assert(
       /catch\s*\([^)]*\)\s*\{/.test(between),
       'etMastery sets f.value and f.fillColor inside the same try block. ' +
         'fillColor throws on Acrobat for Android, so the cell would keep its ' +
         'number only by luck of ordering. They need separate guards.'
+    );
+  },
+
+  /* Guarding the four property writes in etClearMastery did not fix "Clear
+   * all" stopping after the first mastery cell on a real device, and routing
+   * every field lookup through this guarded wrapper (etField, tried next)
+   * did not either -- a second scoring run proved doc.getField itself is
+   * fine even on a field script already wrote to once, which is what this
+   * wrapper was guarding against. Both are RULED OUT causes now, not
+   * suspects. etField is kept anyway: it is a harmless guard around a real
+   * platform call, and removing it buys nothing back. See
+   * claude/30-worksheet-radio-buttons-on-android.md for what is still live. */
+  'mastery and answer lookups go through the guarded getField wrapper': function (tex) {
+    const js = graderJs(tex);
+    assert(
+      /function\s+etField\s*\(/.test(js),
+      'etField (a guarded wrapper around doc.getField) is no longer defined ' +
+        'in the grader script'
+    );
+    ['etPick', 'etMastery', 'etClearMastery'].forEach(function (name) {
+      const fn = fnBody(js, name);
+      assert(
+        !/\bdoc\s*\.\s*getField\s*\(/.test(fn),
+        name + ' calls doc.getField directly instead of etField.'
+      );
+      assert(
+        /\betField\s*\(/.test(fn),
+        name + ' no longer looks up a field at all -- was etField removed ' +
+          'along with the lookup, not just renamed?'
+      );
+    });
+  },
+
+  /* Neither the write-guard fix nor the getField wrapper above changed the
+   * device result, and a second scoring run proved etMastery's own loop is
+   * fine on an already-written field -- ruling out both "a write throws"
+   * and "getField is unreliable on a touched field". The one thing left
+   * that etClearMastery does differently from a plain etMastery run is
+   * execute in the same action as a doc.resetForm() call. This pins the one
+   * untried variable: the mastery loop must run BEFORE resetForm, not after,
+   * so nothing about resetForm's own aftermath runs ahead of it. */
+  'mastery cells are cleared before resetForm runs, not after': function (tex) {
+    const fn = fnBody(graderJs(tex), 'etReset');
+    const clearIdx = fn.indexOf('etClearMastery(');
+    const resetIdx = fn.indexOf('resetForm(');
+    assert(clearIdx !== -1, 'etReset no longer calls etClearMastery');
+    assert(resetIdx !== -1, 'etReset no longer calls doc.resetForm');
+    assert(
+      clearIdx < resetIdx,
+      'etClearMastery runs after doc.resetForm() again. On a real device ' +
+        '"Clear all" stopped after the first mastery cell with mastery ' +
+        'cleared second; running it first is the untried ordering -- see ' +
+        'claude/30-worksheet-radio-buttons-on-android.md.'
     );
   },
 
