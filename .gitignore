@@ -3,3 +3,4 @@ MIGRATION_PLAN.md
 MIGRATION_TUTORIAL.md
 API_CONTRACT.md
 node_modules/
+tools/.mutation-snapshot/

@@ -9,12 +9,36 @@ const fs = require('fs');
 
 const path = require('path');
 
-const ROOT = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed';
-const CODE = ROOT + '/google_apps_script/Code.gs';
-const APP = ROOT + '/app.js';
-const WS = ROOT + '/worksheet_tex.js';
-const SW = ROOT + '/service-worker.js';
-const CSS = ROOT + '/style.css';
+const ROOT = path.join(__dirname, '..');
+// Code.gs is retired: production runs src/actions/*.js against Postgres now,
+// not this file, and every suite that used to catch a Code.gs mutation ran
+// it in gas_stub.js, which retired with it (see the Phase 6 commits
+// retiring test_backend.js and friends). CODE stays defined, and MUTANTS
+// below stays in the file un-deleted, as the record of what Code.gs's rules
+// were -- but neither is snapshotted, checked or run any more.
+const CODE = path.join(ROOT, 'google_apps_script', 'Code.gs');
+const APP = path.join(ROOT, 'app.js');
+const WS = path.join(ROOT, 'worksheet_tex.js');
+const SW = path.join(ROOT, 'service-worker.js');
+const CSS = path.join(ROOT, 'style.css');
+
+// Browser-driven suites (test_worksheet_ui.js, test_exam_dropped_response.js,
+// and the rest once repointed) never load APP/WS/SW/CSS above directly --
+// they fetch the app over HTTP from src/app.js, which serves
+// energytech-api/public/, a SEPARATE copy kept in sync by hand (every
+// "Write embedded worksheet scripts" / "Fix the Android radio-button bug"
+// commit did this exact copy). A mutation applied only to ROOT's copy is
+// invisible to any of those suites -- the same failure mode the realpath
+// check further down exists to catch for the server root itself, one layer
+// up. So every mutation to one of these four is mirrored onto its served
+// twin for the duration of the run, and both are restored together.
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+const SERVED_MIRROR = {
+  [APP]: path.join(ENERGYTECH_API_ROOT, 'public', 'app.js'),
+  [WS]: path.join(ENERGYTECH_API_ROOT, 'public', 'worksheet_tex.js'),
+  [SW]: path.join(ENERGYTECH_API_ROOT, 'public', 'service-worker.js'),
+  [CSS]: path.join(ENERGYTECH_API_ROOT, 'public', 'style.css'),
+};
 
 /* A mutation is a temporary edit to a REAL source file, and the process holding
  * that edit can die in ways no handler catches. The signal handlers further
@@ -28,19 +52,24 @@ const CSS = ROOT + '/style.css';
  * So the harness no longer trusts unwinding alone. It keeps a pristine copy of
  * each file on disk, drops a marker while one is patched, and puts the file
  * back on the next run if it finds that marker still there. */
-const SNAP_DIR = '/tmp/energytech_app/.mutation-snapshot';
+const SNAP_DIR = path.join(__dirname, '.mutation-snapshot');
 const MARKER = path.join(SNAP_DIR, 'in-flight.json');
 
+function recoverOneFile(file, snapshot, label) {
+  if (!snapshot || !fs.existsSync(snapshot)) return false;
+  fs.copyFileSync(snapshot, file);
+  console.log(`  ${label}${file}`);
+  return true;
+}
 function recoverFromEarlierRun() {
   if (!fs.existsSync(MARKER)) return;
   let info = null;
   try { info = JSON.parse(fs.readFileSync(MARKER, 'utf8')); } catch { /* unreadable */ }
-  if (info && info.file && info.snapshot && fs.existsSync(info.snapshot)) {
-    fs.copyFileSync(info.snapshot, info.file);
+  if (info && info.file && recoverOneFile(info.file, info.snapshot, '')) {
     console.log('RECOVERED: an earlier run died holding a mutation.');
-    console.log(`  ${info.file}`);
     console.log(`  was left as: ${info.what}`);
-    console.log('  It has been restored from the snapshot before anything else ran.\n');
+    if (info.mirror) recoverOneFile(info.mirror, info.mirrorSnapshot, '  and its served mirror: ');
+    console.log('  Restored from the snapshot before anything else ran.\n');
   } else {
     console.log('A marker from an earlier run was found but its snapshot is gone.');
     console.log('Check the sources by hand before trusting anything below.\n');
@@ -52,13 +81,14 @@ recoverFromEarlierRun();          // before the originals are read, or a leftove
 
 fs.mkdirSync(SNAP_DIR, { recursive: true });
 const SNAPSHOT = {};
-[CODE, APP, WS, SW, CSS].forEach(f => {
-  const dest = path.join(SNAP_DIR, path.basename(f));
+// CODE is deliberately excluded -- it is not patched any more, so there is
+// nothing to snapshot it against. Each served mirror gets its own snapshot
+// too, named apart from its ROOT twin (both are called app.js on disk).
+[APP, WS, SW, CSS, ...Object.values(SERVED_MIRROR)].forEach(f => {
+  const dest = path.join(SNAP_DIR, (SERVED_MIRROR[f] ? '' : 'served-') + path.basename(f));
   fs.copyFileSync(f, dest);
   SNAPSHOT[f] = dest;
 });
-
-const original = fs.readFileSync(CODE, 'utf8');
 
 const MUTANTS = [
   /* Covering instructors. Everything here is a rule that a page cannot enforce:
@@ -419,19 +449,19 @@ const APP_MUTANTS = [
     what: 'the submission is never read back, so success is only assumed',
     from: "      if (wasExam && traineeLoggedIn()) confirmExamRecorded(code);",
     to:   "      if (false) confirmExamRecorded(code);",
-    suite: 'test_exam_confirm.js'
+    suite: 'test_exam_dropped_response.js'
   },
   {
     what: 'a submission that did not register is reported as recorded',
     from: "  if (found && found.sitting && found.sitting.maySit === false) {",
     to:   "  if (found && found.sitting) {",
-    suite: 'test_exam_confirm.js'
+    suite: 'test_exam_dropped_response.js'
   },
   {
     what: 'a check that could not be made is reported as recorded',
     from: "  // Could not check at all: say that, rather than claiming either outcome.\n  el.innerHTML += '<p class=\"warn\">Could not confirm",
     to:   "  // Could not check at all: say that, rather than claiming either outcome.\n  el.innerHTML += '<p class=\"good\">Recorded. Could not confirm",
-    suite: 'test_exam_confirm.js'
+    suite: 'test_exam_dropped_response.js'
   },
   {
     // The code this guarded is still live -- submitOnlineResult still calls
@@ -453,7 +483,15 @@ const APP_MUTANTS = [
     to:   "    $('studentQuizContainer').addEventListener('change', () => {});",
     suite: 'test_exam_view.js'
   },
-  /* --- resetting a forgotten password, on the screen --- */
+  /* --- resetting a forgotten password, on the screen ---
+   * test_password_reset_ui.js, the suite these four name, was never actually
+   * built -- checked against this repo's full git history; there is no
+   * record of it ever existing. The behaviour below is real and still
+   * current (all four patterns still match app.js), it has simply never had
+   * anything running it. Left as-is rather than reassigned to a suite that
+   * does not cover this ground, or retired as though the behaviour were
+   * gone -- it is not. A real test_password_reset_ui.js is what closes this,
+   * not a rewrite here. */
   {
     what: 'the app opens the interface anyway, so the temporary password is enough to work with',
     from: "    if (data.mustChangePassword) {\n      if ($('teacherLoginPassword')) $('teacherLoginPassword').value = '';",
@@ -478,12 +516,15 @@ const APP_MUTANTS = [
     to:   "  const admins = list.filter(i => false);\n  admins.push(1, 2);",
     suite: 'test_password_reset_ui.js'
   },
-  {
-    what: 'the compatibility guard goes back to reading any bare message as an old deployment',
-    from: "  if (data.ok && /backend is running/i.test(String(data.message || ''))) {",
-    to:   "  if (data.ok && data.message && !data.intakes && !data.trainees && !data.trainee\n      && data.added === undefined && !data.label && !data.name && !data.deleted\n      && !data.energytechId && !data.token && !data.status) {",
-    suite: 'test_password_reset_ui.js'
-  },
+  /* Retired, not reassigned: this one specifically is gone, not just
+   * untested. It detects a JSONP-era Apps Script deployment answering a
+   * bare "backend is running" instead of real fields -- a shape that only
+   * ever came from Code.gs, over no-cors. Phase 5 replaced that transport
+   * with a real fetch to /api/call, which cannot produce this shape, and the
+   * served copy (energytech-api/public/app.js) has already dropped this
+   * code entirely -- confirmed absent, not just unreached. Left in
+   * app.js's own mathquiz copy as a leftover of the transport this repo no
+   * longer runs. */
 
   /* --- the explanation video on the question it belongs to --- */
   {
@@ -925,7 +966,8 @@ const SW_MUTANTS = [
  * so that argument is read back out of the live source and resolved for real,
  * not just asserted against itself, before the mutation results are worth
  * reading. */
-const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+// ENERGYTECH_API_ROOT is declared near the top of the file, alongside
+// SERVED_MIRROR.
 const ENERGYTECH_API_SRC_APP = path.join(ENERGYTECH_API_ROOT, 'src', 'app.js');
 const ENERGYTECH_API_PUBLIC_APP = path.join(ENERGYTECH_API_ROOT, 'public', 'app.js');
 
@@ -958,9 +1000,10 @@ try {
  * reported as SKIPPED two hundred lines into the output where it reads like a
  * footnote. */
 {
-  const sources = { [CODE]: original, [APP]: appOriginal, [WS]: wsOriginal, [SW]: swOriginal, [CSS]: cssOriginal };
+  const sources = { [APP]: appOriginal, [WS]: wsOriginal, [SW]: swOriginal, [CSS]: cssOriginal };
   const missing = [];
-  [[MUTANTS, CODE], [APP_MUTANTS, APP], [WS_MUTANTS, WS], [WS_APP_MUTANTS, APP],
+  // MUTANTS/CODE excluded -- retired along with Code.gs, not checked, not run.
+  [[APP_MUTANTS, APP], [WS_MUTANTS, WS], [WS_APP_MUTANTS, APP],
    [SW_MUTANTS, SW], [CSS_MUTANTS, CSS]]
     .forEach(([list, file]) => list.forEach(m => {
       if (!sources[file].includes(m.from)) missing.push(`${path.basename(file)}: ${m.what}`);
@@ -975,11 +1018,39 @@ try {
   }
 }
 
-let caught = 0, survived = [];
+/* Unlike a stale `from` (fatal -- every later result would be measuring the
+ * mutant), a mutant naming a suite that does not exist on disk is a known,
+ * already-documented situation (test_password_reset_ui.js: see the comment
+ * above those four mutants) and stopping the whole run for it would hide
+ * every other result behind it. Reported up front, not fatal, and skipped
+ * below rather than let execFileSync's ENOENT be mistaken for a caught
+ * mutation -- a missing suite proves nothing about the guard it was meant
+ * to test. */
+const missingSuites = new Set();
+{
+  const allMutants = [...APP_MUTANTS, ...WS_MUTANTS, ...WS_APP_MUTANTS, ...SW_MUTANTS, ...CSS_MUTANTS];
+  allMutants.forEach(m => {
+    if (!fs.existsSync(path.join(__dirname, m.suite))) missingSuites.add(m.suite);
+  });
+  if (missingSuites.size) {
+    console.log('No suite on disk for:');
+    [...missingSuites].forEach(s => console.log('  ' + s));
+    console.log('Every mutant naming one of these is reported separately below, not run.\n');
+  }
+}
+
+let caught = 0, survived = [], noSuite = [];
 console.log('baseline:');
-for (const suite of ['test_my_history.js', 'test_history.js', 'test_exam_release.js', 'test_shuffle.js', 'test_retake.js', 'test_exam_view.js', 'test_exam_confirm.js', 'test_report.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js', 'test_password_reset.js', 'test_password_reset_ui.js']) {
+// test_my_history.js, test_history.js, test_exam_release.js, test_retake.js,
+// test_report.js and test_password_reset.js are retired (gas_stub, superseded
+// by energytech-api/tests/*.test.js -- see the Phase 6 backfill commits).
+// test_exam_confirm.js was renamed test_exam_dropped_response.js when its
+// premise inverted (claude/11-exam-handed-in.md in energytech-api).
+// test_password_reset_ui.js never existed in this repo; nothing here ever
+// pointed anywhere real.
+for (const suite of ['test_shuffle.js', 'test_exam_view.js', 'test_exam_dropped_response.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js']) {
   try {
-    execFileSync('node', ['/tmp/energytech_app/' + suite], { stdio: 'pipe' });
+    execFileSync('node', [path.join(__dirname, suite)], { stdio: 'pipe' });
     console.log(`  clean   ${suite}`);
   } catch {
     console.log(`  BASELINE FAILS -- ${suite}. Nothing below means anything.`);
@@ -994,10 +1065,13 @@ console.log('');
  * with a guard deleted from it. That happened: a killed run removed a line from
  * app.js, and the next test failed for a reason that had nothing to do with the
  * code under test. So the restore is a handler, not just the next statement. */
-let inFlight = null;                    // { file, base } while a mutant is applied
+let inFlight = null;                    // { file, base, mirror } while a mutant is applied
 function restoreInFlight() {
   if (!inFlight) return;
   try { fs.writeFileSync(inFlight.file, inFlight.base); } catch { /* nothing better to do */ }
+  if (inFlight.mirror) {
+    try { fs.copyFileSync(SNAPSHOT[inFlight.mirror], inFlight.mirror); } catch { /* nothing better to do */ }
+  }
   try { if (fs.existsSync(MARKER)) fs.unlinkSync(MARKER); } catch { /* ditto */ }
   inFlight = null;
 }
@@ -1005,9 +1079,12 @@ function restoreInFlight() {
 /* Written to disk BEFORE the file is patched and removed after it is put back.
  * The in-memory restore above is the fast path; this is what survives a kill
  * the process never gets to see. */
-function markInFlight(file, what) {
+function markInFlight(file, mirror, what) {
   try {
-    fs.writeFileSync(MARKER, JSON.stringify({ file, snapshot: SNAPSHOT[file], what }, null, 1));
+    fs.writeFileSync(MARKER, JSON.stringify(
+      { file, snapshot: SNAPSHOT[file], mirror: mirror || null, mirrorSnapshot: mirror ? SNAPSHOT[mirror] : null, what },
+      null, 1
+    ));
   } catch { /* the run is still correct, only the crash recovery is lost */ }
 }
 ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach(sig => process.on(sig, () => {
@@ -1023,36 +1100,69 @@ process.on('uncaughtException', err => {
 process.on('exit', restoreInFlight);
 
 function runMutants(list, file, base) {
+  const mirror = SERVED_MIRROR[file] || null;
   for (const m of list) {
+    if (missingSuites.has(m.suite)) {
+      console.log(`  NO SUITE ${m.what}  (${m.suite} does not exist)`);
+      noSuite.push(m.what + ` [${m.suite}]`);
+      continue;
+    }
     if (!base.includes(m.from)) {
       console.log(`  SKIPPED  ${m.what}  (the code it patches has moved)`);
       survived.push(m.what + ' [pattern not found]');
       continue;
     }
-    inFlight = { file, base };
-    markInFlight(file, m.what);
+    inFlight = { file, base, mirror };
+    markInFlight(file, mirror, m.what);
     fs.writeFileSync(file, base.replace(m.from, m.to));
+    // The mirror is a SEPARATE file, not a copy of `base` -- app.js and
+    // service-worker.js have diverged from their ROOT twins since Phase 5
+    // (only worksheet_tex.js and style.css still match byte for byte).
+    // Writing `base`'s mutated content over the mirror would silently
+    // replace the real served file with a different, wrong one for the
+    // whole mutation window. So the same from/to is applied to the mirror's
+    // OWN current content instead, touching only the matched snippet -- and
+    // if that snippet is not there, the mirror is left alone and the result
+    // below is flagged rather than trusted.
+    let mirrorPatched = null;
+    if (mirror) {
+      const mirrorBase = fs.readFileSync(mirror, 'utf8');
+      if (mirrorBase.includes(m.from)) {
+        fs.writeFileSync(mirror, mirrorBase.replace(m.from, m.to));
+        mirrorPatched = true;
+      } else {
+        mirrorPatched = false;
+      }
+    }
     let failed = false;
-    try { execFileSync('node', ['/tmp/energytech_app/' + m.suite], { stdio: 'pipe' }); }
+    try { execFileSync('node', [path.join(__dirname, m.suite)], { stdio: 'pipe' }); }
     catch { failed = true; }
     restoreInFlight();
-    if (failed) { caught++; console.log(`  caught   ${m.what}  (${m.suite})`); }
-    else { survived.push(m.what); console.log(`  SURVIVED ${m.what}  (${m.suite})`); }
+    const mirrorNote = mirrorPatched === false
+      ? `  [served ${path.basename(mirror)} does not contain this pattern -- only ROOT was mutated; a browser-driven result here may not mean what it looks like]`
+      : '';
+    if (failed) { caught++; console.log(`  caught   ${m.what}  (${m.suite})${mirrorNote}`); }
+    else { survived.push(m.what + (mirrorNote ? ' [mirror not patched]' : '')); console.log(`  SURVIVED ${m.what}  (${m.suite})${mirrorNote}`); }
   }
 }
 
-runMutants(MUTANTS, CODE, original);
+// MUTANTS/CODE excluded -- retired along with Code.gs.
 runMutants(APP_MUTANTS, APP, appOriginal);
 runMutants(WS_MUTANTS, WS, wsOriginal);
 runMutants(WS_APP_MUTANTS, APP, appOriginal);
 runMutants(SW_MUTANTS, SW, swOriginal);
 runMutants(CSS_MUTANTS, CSS, cssOriginal);
 
-const total = MUTANTS.length + APP_MUTANTS.length + WS_MUTANTS.length + WS_APP_MUTANTS.length
+const total = APP_MUTANTS.length + WS_MUTANTS.length + WS_APP_MUTANTS.length
             + SW_MUTANTS.length + CSS_MUTANTS.length;
 console.log(`\n${caught} of ${total} broken guards were caught by the tests.`);
+if (noSuite.length) {
+  console.log(`\nNO SUITE TO RUN (${noSuite.length}, not counted above or below):`);
+  noSuite.forEach(s => console.log('  ' + s));
+}
 if (survived.length) {
   console.log('\nNOT ACTUALLY TESTED:');
   survived.forEach(s => console.log('  ' + s));
   process.exit(1);
 }
+if (noSuite.length) process.exit(1);

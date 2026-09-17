@@ -12,7 +12,7 @@
  * And a fourth, easy to break by accident: attempts recorded BEFORE this
  * feature existed must still rebuild exactly as they did. */
 const fs = require('fs');
-const path = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed/';
+const path = require('path').join(__dirname, '..') + '/';
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
