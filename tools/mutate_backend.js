@@ -718,10 +718,22 @@ const APP_MUTANTS = [
     to:   "      ;",
     suite: 'test_panels.js'
   },
+  /* Retired in this exact shape, not reassigned: PANELS_COLLAPSED_BY_DEFAULT
+   * itself now genuinely differs between the two copies, on purpose --
+   * ['connectionPanel'] here (this file still has that card), ['passwordPanel']
+   * in energytech-api/public/app.js (Phase 5 dropped the card entirely; see
+   * that file's own comment on the constant). test_panels.js was repointed to
+   * drive the REAL served page, so it no longer reads this file's copy of the
+   * constant at all -- mutating the VALUE here proves nothing about what a
+   * trainee-facing regression would actually do, and mutating the served
+   * mirror's different value under this same from/to would fail the pre-flight
+   * check that the pattern exists in THIS file first. The mutation below tests
+   * the shared lookup mechanism instead, which is still byte-identical in both
+   * copies and is what a regression in either one would actually have to break. */
   {
-    what: 'the connection setup card starts open again, back at the top of the instructor\'s attention',
-    from: "const PANELS_COLLAPSED_BY_DEFAULT = ['connectionPanel'];",
-    to:   "const PANELS_COLLAPSED_BY_DEFAULT = [];",
+    what: 'nothing starts folded by default any more, whichever panel that used to be',
+    from: "      : PANELS_COLLAPSED_BY_DEFAULT.includes(panel.id));",
+    to:   "      : false);",
     suite: 'test_panels.js'
   },
   {
@@ -1042,7 +1054,7 @@ console.log('baseline:');
 // by energytech-api/tests/*.test.js -- see the Phase 6 backfill commits).
 // test_exam_confirm.js was renamed test_exam_dropped_response.js when its
 // premise inverted (claude/11-exam-handed-in.md in energytech-api).
-for (const suite of ['test_shuffle.js', 'test_exam_view.js', 'test_exam_dropped_response.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js', 'test_password_reset_ui.js']) {
+for (const suite of ['test_shuffle.js', 'test_exam_view.js', 'test_exam_dropped_response.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js', 'test_password_reset_ui.js', 'test_panels.js']) {
   try {
     execFileSync('node', [path.join(__dirname, suite)], { stdio: 'pipe' });
     console.log(`  clean   ${suite}`);

@@ -2999,6 +2999,13 @@ function studentDownloadResult() {
 const PANEL_STATE_KEY = 'energytechPanelCollapsed_v1';
 // Only the connection setup starts folded: the URL ships baked into the build,
 // so the card is there for the day the Apps Script is redeployed and not before.
+//
+// energytech-api/public/app.js -- the copy actually served, kept in sync with
+// this file by hand -- deliberately does NOT match this value. Its
+// index.html dropped the connectionPanel card entirely in Phase 5 (no URL to
+// configure once serving is same-origin); it collapses passwordPanel
+// instead, the other card this feature was built for. Do not "fix" that
+// copy to match this line during a sync -- see its own comment.
 const PANELS_COLLAPSED_BY_DEFAULT = ['connectionPanel'];
 
 function readPanelState() {

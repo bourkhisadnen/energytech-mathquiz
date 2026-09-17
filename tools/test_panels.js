@@ -1,4 +1,9 @@
-/* The instructor page's cards: their order, and folding them away.
+/* The instructor page's cards: their order, and folding them away, in a real
+ * browser against the REAL energytech-api backend (Express + Postgres) --
+ * repointed for Phase 6 from the mocked-Apps-Script version this file used
+ * to be. See test_roster.js's header for the shared mechanics (served from
+ * public/ via src/app.js, seeded/asserted through TEST_DATABASE_URL, never
+ * DATABASE_URL).
  *
  * The page had grown to nine cards with the two least-used ones (the backend
  * URL and the password change) sitting at the top, above the card an
@@ -11,29 +16,38 @@
  * the app hides wholesale when a session report is opened. A tidier-looking
  * implementation that lifted every heading to the top of its card would leave
  * "My sessions" and its triangle stranded above an open report.
- */
+ *
+ * This is a straight repoint, not a rewrite, except where the served page has
+ * genuinely diverged from what this suite used to check: Phase 5 dropped the
+ * whole "Instructor connection setup" card (energytech-api/public/index.html
+ * has no #connectionPanel, no #webAppUrl, no #saveWebAppUrlBtn at all -- a
+ * same-origin server has no Apps Script URL to configure), so the served page
+ * has seven foldable cards, not eight, and the old section 7 -- driving the
+ * connection card's URL field and Save button -- has no field left to drive
+ * and is removed rather than repointed. It was the OTHER "least-used" card
+ * (see the paragraph above) that started folded; with its sibling gone,
+ * passwordPanel is what is left, and what public/app.js's own comment says
+ * takes over the role. Do not add a connection-card section back here --
+ * that card is gone from the served app on purpose, not by accident. */
+
+const path = require('path');
 const { chromium } = require('playwright');
-const BASE = 'http://127.0.0.1:8901/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+const {
+  pool, resetDb, insertInstructor,
+} = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
 const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
 
 const ORDER = ['setupPanel', 'resultPanel', 'dashboardPanel', 'sessionsPanel',
-               'intakePanelSection', 'adminPanelSection', 'passwordPanel', 'connectionPanel'];
-
-function mock(page) {
-  return page.route(/script\.google\.com/, r => {
-    const q = Object.fromEntries(new URL(r.request().url()).searchParams);
-    const d = q.action === 'auth_login'
-      ? { ok: true, token: 'T', username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin' }
-      : q.action === 'roster_list' ? { ok: true, intakes: [], groups: [] }
-      : { ok: true, message: 'mock' };
-    return r.fulfill({ status: 200, contentType: 'application/javascript',
-                       body: `${q.callback}(${JSON.stringify(d)});` });
-  });
-}
+               'intakePanelSection', 'adminPanelSection', 'passwordPanel'];
 
 const cardState = page => page.evaluate(() =>
   [...document.querySelectorAll('#teacherInterface section.panel')]
@@ -47,7 +61,18 @@ const cardState = page => page.evaluate(() =>
     })));
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: EXEC });
+  await resetDb();
+  const pw = await hashPasswordForStorage('x');
+  await insertInstructor({
+    username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin', status: 'approved',
+    passwordHash: pw.passwordHash, passwordSalt: pw.passwordSalt, passwordAlgo: pw.passwordAlgo,
+  });
+
+  const server = app.listen(0);
+  const { port } = server.address();
+  const BASE = `http://127.0.0.1:${port}/index.html`;
+
+  const browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
   const errs = [];
 
@@ -55,7 +80,6 @@ const cardState = page => page.evaluate(() =>
     const page = await ctx.newPage();
     page.on('pageerror', e => errs.push(String(e)));
     page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
-    await mock(page);
     await page.goto(BASE);
     await page.click('#teacherModeBtn');
     await page.fill('#teacherLoginUsername', 'adnen');
@@ -76,11 +100,11 @@ const cardState = page => page.evaluate(() =>
   eq(order[0], '(account bar)', 'and the "logged in as" bar stays above them all');
   const titles = (await cardState(page)).map(c => c.title);
   eq(titles[0], 'Create quiz session', 'so the first thing on the page is the reason to open the app');
-  eq(titles[titles.length - 1], 'Instructor connection setup', 'and the backend URL is the last thing');
+  eq(titles[titles.length - 1], 'Change my password', 'and changing your password is the last thing');
 
   console.log('\n=== 2. Every card can be folded; the account bar is not a card ===');
   const state = await cardState(page);
-  eq(state.length, 8, 'eight cards carry a fold triangle');
+  eq(state.length, 7, 'seven cards carry a fold triangle');
   const barHasToggle = await page.evaluate(() =>
     !!document.querySelector('#teacherInterface .account-bar-panel .panel-toggle'));
   ok(!barHasToggle, 'the account bar has no heading and so gets no triangle');
@@ -92,14 +116,20 @@ const cardState = page => page.evaluate(() =>
       && (t.getAttribute('aria-label') || '').length > 0));
   ok(wired, 'each triangle names the region it controls, for a screen reader');
 
-  console.log('\n=== 3. Only the connection setup starts folded ===');
+  console.log('\n=== 3. Only the password card starts folded ===');
+  // The connection-setup card this used to be -- the URL was baked into the
+  // build, so it was out of the way until the day the Apps Script got
+  // redeployed -- is gone from the served page (see this file's header).
+  // passwordPanel is the other "least-used" card the fold feature was built
+  // for, and public/app.js's own PANELS_COLLAPSED_BY_DEFAULT comment says
+  // explicitly that it is what took over the role.
   const folded = state.filter(c => c.collapsed).map(c => c.id);
-  eq(folded, ['connectionPanel'],
-    'the URL is baked into the build, so that card is out of the way until it is needed');
+  eq(folded, ['passwordPanel'],
+    'changing your password is rare enough to start out of the way');
   ok(state.filter(c => !c.collapsed).every(c => c.ariaExpanded === 'true' && !c.bodyHidden),
     'and every other card is open, with aria and the body agreeing');
-  const conn = state.find(c => c.id === 'connectionPanel');
-  ok(conn.ariaExpanded === 'false' && conn.bodyHidden,
+  const pwd = state.find(c => c.id === 'passwordPanel');
+  ok(pwd.ariaExpanded === 'false' && pwd.bodyHidden,
     'the folded one reports itself folded, and its body really is hidden');
 
   console.log('\n=== 4. Folding and unfolding ===');
@@ -127,8 +157,8 @@ const cardState = page => page.evaluate(() =>
   ok(!(await cardState(page)).find(c => c.id === 'dashboardPanel').collapsed, 'and unfolds it');
 
   console.log('\n=== 5. What is folded is still folded next time ===');
-  await page.click('#sessionsPanel .panel-toggle');       // fold one
-  await page.click('#connectionPanel .panel-toggle');     // and unfold the one that starts folded
+  await page.click('#sessionsPanel .panel-toggle');      // fold one
+  await page.click('#passwordPanel .panel-toggle');      // and unfold the one that starts folded
   await page.waitForTimeout(200);
   const stored = await page.evaluate(() => localStorage.getItem('energytechPanelCollapsed_v1'));
   ok(stored && stored.includes('sessionsPanel'), `the choice is written down (${stored})`);
@@ -141,7 +171,7 @@ const cardState = page => page.evaluate(() =>
   const page2 = await signIn();
   const back = await cardState(page2);
   ok(back.find(c => c.id === 'sessionsPanel').collapsed, 'a card folded last time comes back folded');
-  ok(!back.find(c => c.id === 'connectionPanel').collapsed,
+  ok(!back.find(c => c.id === 'passwordPanel').collapsed,
     'and one deliberately unfolded stays unfolded -- the default does not reassert itself');
 
   console.log('\n=== 6. "My sessions" keeps its heading where the app expects it ===');
@@ -157,23 +187,12 @@ const cardState = page => page.evaluate(() =>
   ok(nested.insideWorkspace, 'its heading and triangle live inside #sessionsWorkspace, not above it');
   ok(nested.reportIsSibling, 'and the report view is still a sibling of that workspace');
 
-  console.log('\n=== 7. The connection card still works when opened ===');
-  const connWorks = await page2.evaluate(() => {
-    const panel = document.getElementById('connectionPanel');
-    if (panel.classList.contains('is-collapsed')) panel.querySelector('.panel-toggle').click();
-    const input = document.getElementById('webAppUrl');
-    return { hasInput: !!input, hasValue: !!(input && input.value),
-             hasSave: !!document.getElementById('saveWebAppUrlBtn'),
-             hasStatus: !!document.getElementById('onlineStatus') };
-  });
-  ok(connWorks.hasInput && connWorks.hasSave && connWorks.hasStatus,
-    'the URL field, its Save button and the status line all survived the move');
-  ok(connWorks.hasValue, 'and the field is still populated with the embedded URL');
-
-  console.log('\n=== 8. No page errors ===');
+  console.log('\n=== 7. No page errors ===');
   eq(errs, [], 'no console or page errors');
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });

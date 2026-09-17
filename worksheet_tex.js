@@ -315,7 +315,7 @@ function etReset(doc) {
     fields.push("WrongList");
     fields.push("BlankList");
     etClearMastery(doc);
-    doc.resetForm(fields);
+    doc.resetForm();
 }
 `;
 
