@@ -7,13 +7,17 @@
 # The build FAILS, and the previous deployment stays live, if a file is not classified
 # there or the staged site is incomplete.
 #
-# THIS DOES NOTHING UNTIL the repository's Pages source is switched to GitHub Actions
-# (Settings -> Pages -> Build and deployment -> Source). Until then the deploy job fails
-# harmlessly and the branch-based deployment keeps serving. Order that is safe:
-#   1. Run this workflow once by hand (Actions -> Deploy site to GitHub Pages -> Run).
-#      Its "build" job must be green: it proves the site stages. "deploy" will fail.
-#   2. Switch the Pages source to GitHub Actions.
-#   3. Run the workflow again. From then on every push to main redeploys.
+# THIS DOES NOT, BY ITSELF, STOP THE DEVELOPER FILES BEING SERVED. While the repository's
+# Pages source is still "Deploy from a branch", GitHub also runs its own branch build on
+# every push, and it accepts this deployment as well: two deployments are made for the one
+# site, and whichever finishes last is what is served. Observed on 2026-09-21: the branch
+# build (the whole tree, tools/ included) was the one left serving. The site works either
+# way, since both serve the same app files; only this workflow's deployment hides the
+# developer ones. What makes it deterministic is switching Settings -> Pages -> Build and
+# deployment -> Source to "GitHub Actions" (owner only), which turns the branch build off.
+# Then run this workflow once (Actions -> Deploy site to GitHub Pages -> Run workflow),
+# and every later push to main redeploys. Its build job was proven green on GitHub's runner
+# on 2026-09-21, so no dry run is needed first.
 name: Deploy site to GitHub Pages
 
 on:
