@@ -14,15 +14,34 @@
  * real and reading back what it cached also catches a precache entry that
  * 404s -- cache.addAll() rejects atomically, which fails the install and leaves
  * trainees with nothing cached, again silently.
+ *
+ * Repointed for Phase 6 like the other browser suites. It used to read a copy
+ * of the app at /tmp/energytech_app/... and drive it on a static server at
+ * 127.0.0.1:8901, neither of which exists on this machine, so it could not
+ * start at all -- and mutate_backend.js counted "could not start" as "caught"
+ * (claude/33-harness-counted-a-dead-suite-as-caught.md). It now reads the files
+ * from energytech-api/public/ -- the directory src/app.js serves, which is what
+ * production serves -- and loads the page from src/app.js itself on an ephemeral
+ * port. No database is touched: nothing here signs in.
+ *
+ * Unchanged from the old version: every section and assertion. Only where the
+ * files come from and how the browser is launched (Playwright's own chromium,
+ * not a hard-coded Linux path) moved.
  */
 const { chromium } = require('playwright');
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const APP = '/tmp/energytech_app/energytech_quiz_app_session_sync_fixed';
-const BASE = 'http://127.0.0.1:8901/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+// Required before src/app so the app lands on the test database even though it
+// never queries it here -- same order every repointed suite uses.
+const { pool } = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
+
+const APP = path.join(ENERGYTECH_API_ROOT, 'public');
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
@@ -43,6 +62,9 @@ function precacheList() {
 }
 
 (async () => {
+  const server = app.listen(0);
+  const BASE = `http://127.0.0.1:${server.address().port}/index.html`;
+
   console.log('\n=== 1. The service worker is valid JavaScript ===');
   // The cheap check that the expensive one below supersedes -- kept because
   // when it fails it says exactly which line, which `register()` rejecting
@@ -96,7 +118,7 @@ function precacheList() {
   ok(referenced.includes('apple-touch-icon.png'),
     'including an apple-touch-icon, which iOS uses instead of the manifest');
 
-  const browser = await chromium.launch({ executablePath: EXEC });
+  const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   const missing = [];
   page.on('response', r => { if (r.status() >= 400) missing.push(new URL(r.url()).pathname); });
@@ -203,6 +225,8 @@ function precacheList() {
   eq(missing.filter(u => /icon|favicon|manifest/.test(u)), [], 'and nothing icon-related 404s');
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });

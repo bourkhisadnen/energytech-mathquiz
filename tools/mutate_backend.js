@@ -4,7 +4,7 @@
  * true passes every test that only ever exercises the allowed case. So each
  * guard is deliberately broken, one at a time, and the suite must fail. A
  * mutation that survives is a guard nothing is actually testing. */
-const { execFileSync } = require('child_process');
+const { runSuite, runSuiteRetrying, waitForTcp, mutantTimeoutMs, fmt, checkEnvironment, formatPreflight } = require('./run_suite');
 const fs = require('fs');
 
 const path = require('path');
@@ -42,7 +42,7 @@ const SERVED_MIRROR = {
 
 /* A mutation is a temporary edit to a REAL source file, and the process holding
  * that edit can die in ways no handler catches. The signal handlers further
- * down cover Ctrl-C and a clean SIGTERM, but execFileSync blocks the event loop
+ * down cover Ctrl-C and a clean SIGTERM, but running a suite blocks the event loop
  * for the whole of each suite, so a SIGTERM that arrives mid-suite and is
  * followed by a hard kill never gets to run them. That happened: a run cut off
  * at a time limit left `if (built.images.length)` reading `if (false)` in
@@ -1027,12 +1027,34 @@ try {
   }
 }
 
+/* A served copy whose line endings differ from its source's silently defeats
+ * every multi-line mutation pattern: the pattern is found in ROOT (so the check
+ * above passes) and not in the served file, which is the one the browser loads,
+ * so those mutants "survive" for a reason that has nothing to do with the tests.
+ * This happened -- an editing script rewrote energytech-api/public/app.js as CRLF
+ * on Windows and the run reported a survivor forty-five minutes in. Compared up
+ * front and fatal, so it costs seconds. */
+{
+  const eol = (f) => (fs.readFileSync(f, 'utf8').includes('\r\n') ? 'CRLF' : 'LF');
+  const mismatched = Object.entries(SERVED_MIRROR)
+    .filter(([root, mirror]) => eol(root) !== eol(mirror))
+    .map(([root, mirror]) => `${path.basename(root)} is ${eol(root)} but its served copy ${path.relative(ENERGYTECH_API_ROOT, mirror)} is ${eol(mirror)}`);
+  if (mismatched.length) {
+    console.log('Line endings differ between a source file and the copy the browser loads:\n');
+    mismatched.forEach(s => console.log('  ' + s));
+    console.log('\nMulti-line mutation patterns would match one and not the other, so mutants would');
+    console.log('survive (or be caught) for reasons that have nothing to do with the tests.');
+    console.log('Make them the same (the repos are LF) and run again.');
+    process.exit(1);
+  }
+}
+
 /* Unlike a stale `from` (fatal -- every later result would be measuring the
  * mutant), a mutant naming a suite that does not exist on disk (this is how
  * the four test_password_reset_ui.js mutations sat for years before that
  * suite was written) is reported up front, not fatal -- stopping the whole
  * run for it would hide every other result behind it -- and skipped below
- * rather than let execFileSync's ENOENT be mistaken for a caught mutation.
+ * rather than let a spawn ENOENT be mistaken for a caught mutation.
  * A missing suite proves nothing about the guard it was meant to test. */
 const missingSuites = new Set();
 {
@@ -1047,20 +1069,97 @@ const missingSuites = new Set();
   }
 }
 
-let caught = 0, survived = [], noSuite = [];
+/* The database the suites use is on Railway, and a suite that cannot reach it
+ * dies in a second or two. When one does, wait for the host to answer again
+ * before retrying it, rather than retrying blind (see run_suite.js). Never
+ * printed or logged beyond host:port. */
+const NETWORK_WAIT = (() => {
+  try {
+    const env = fs.readFileSync(path.join(ENERGYTECH_API_ROOT, '.env'), 'utf8');
+    const m = /^\s*TEST_DATABASE_URL\s*=\s*(\S+)/m.exec(env);
+    if (!m) return null;
+    const u = new URL(m[1].replace(/^["']|["']$/g, ''));
+    return { host: u.hostname, port: u.port || 5432 };
+  } catch { return null; }
+})();
+const waitForNetwork = () => {
+  if (!NETWORK_WAIT) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30000); return; }
+  const r = waitForTcp(NETWORK_WAIT.host, NETWORK_WAIT.port, { log: console.log });
+  if (r.up && r.waitedMs > 1000) console.log(`  ... back after ${fmt(r.waitedMs)}`);
+};
+
+let caught = 0, survived = [], noSuite = [], unverified = [], timedOut = [], inconclusive = [], inconsistent = [];
+// What the run found, one entry per suite and per mutant, written to
+// mutation-report.md at the end. "Caught" alone says a suite noticed; the first
+// failing check says which assertion did.
+const reportBaseline = [], reportMutants = [];
+
+/* Can this process run the suites at all? Asked once, here, before the baseline and
+ * before any source is patched, because the answer used to arrive as eleven
+ * `BASELINE FAILS` and sixty `UNVERIFIED` mutants several minutes in (no browser
+ * this process could see; `unzip` missing from a detached process's PATH). It
+ * exits before the report is written, so a run that cannot start does not
+ * overwrite the last run that could. The suites are the ones the mutants name,
+ * and what each needs is read off its own source (see run_suite.js). */
+{
+  const suiteFiles = [...new Set([...APP_MUTANTS, ...WS_MUTANTS, ...WS_APP_MUTANTS, ...SW_MUTANTS, ...CSS_MUTANTS]
+    .map(m => m.suite).filter(s => !missingSuites.has(s)))].sort().map(s => path.join(__dirname, s));
+  const pre = checkEnvironment(suiteFiles);
+  if (!pre.ok) {
+    console.log(formatPreflight(pre));
+    process.exit(1);
+  }
+  const found = Object.entries(pre.programs).map(([n]) => n).sort().join(', ');
+  console.log(`preflight: ok -- a browser launches for ${pre.browserSuites.length} browser suites; on PATH: ${found}\n`);
+  // `--preflight-only` (tools\run-mutation.cmd check): answer the one question and stop, so a
+  // machine can be checked in seconds instead of by starting a fifty-minute run.
+  if (process.argv.includes('--preflight-only')) process.exit(0);
+}
+
 console.log('baseline:');
 // test_my_history.js, test_history.js, test_exam_release.js, test_retake.js,
 // test_report.js and test_password_reset.js are retired (gas_stub, superseded
 // by energytech-api/tests/*.test.js -- see the Phase 6 backfill commits).
 // test_exam_confirm.js was renamed test_exam_dropped_response.js when its
 // premise inverted (claude/11-exam-handed-in.md in energytech-api).
-for (const suite of ['test_shuffle.js', 'test_exam_view.js', 'test_exam_dropped_response.js', 'test_report_ui.js', 'test_worksheet.js', 'test_worksheet_ui.js', 'test_card_video.js', 'test_password_reset_ui.js', 'test_panels.js']) {
-  try {
-    execFileSync('node', [path.join(__dirname, suite)], { stdio: 'pipe' });
-    console.log(`  clean   ${suite}`);
-  } catch {
-    console.log(`  BASELINE FAILS -- ${suite}. Nothing below means anything.`);
-    process.exit(1);
+//
+/* The baseline is every suite a mutant names, not a hand-kept list. It used to
+ * be a hard-coded list, and four suites that mutants named (test_ch12a,
+ * test_ch04, test_instructor_roster, test_appshell) were not on it: they cannot
+ * launch here at all (a Linux chromium path, a JSONP mock, a D:\tmp file), so
+ * they exited non-zero on UNMUTATED code -- and a non-zero exit is exactly what
+ * "caught" means below. Twelve mutants were reported caught by a suite that had
+ * never run. A suite that fails on clean code cannot vouch for anything, so
+ * its mutants are reported UNVERIFIED and the run exits 1; the rest are still
+ * measured, because a broken suite says nothing about the others. */
+const brokenSuites = new Set();
+const flakySuites = new Set();
+const baselineMs = {};
+{
+  const named = new Set([...APP_MUTANTS, ...WS_MUTANTS, ...WS_APP_MUTANTS, ...SW_MUTANTS, ...CSS_MUTANTS]
+    .map(m => m.suite).filter(s => !missingSuites.has(s)));
+  for (const suite of [...named].sort()) {
+    const r = runSuiteRetrying(path.join(__dirname, suite), {}, {
+      onRetry: (x, i) => console.log(`  ... ${suite} hit an infrastructure error (${x.infra}); retrying (${i}/3) once the network is back`), pause: waitForNetwork });
+    let flaky = false;
+    if (r.status !== 'pass') {
+      // Once more, and if that passes the suite is FLAKY: usable, but not trusted
+      // -- its mutants must each fail twice before they count (see runMutants).
+      // Hiding a flaky baseline would be as bad as failing the run for one.
+      console.log(`  ... ${suite} failed its baseline (${r.status}${r.infra ? ', infrastructure' : ''}); running it once more to tell a flake from a broken suite`);
+      const r2 = runSuiteRetrying(path.join(__dirname, suite), {});
+      if (r2.status === 'pass') { flaky = true; flakySuites.add(suite); Object.assign(r, r2); }
+    }
+    reportBaseline.push({ suite, status: r.status, ms: r.ms, tally: r.tally, flaky });
+    if (r.status === 'pass') {
+      baselineMs[suite] = r.ms;
+      console.log(`  ${flaky ? 'FLAKY  ' : 'clean  '} ${suite}  (${fmt(r.ms)}${r.tally ? `, ${r.tally.passed}/${r.tally.total} checks` : ''})${flaky ? '  -- passed only on the second run' : ''}`);
+    } else {
+      brokenSuites.add(suite);
+      const why = r.status === 'timeout' ? `did not finish in ${fmt(r.ms)}`
+        : r.infra ? `infrastructure error, not a failed check: ${r.infra}` : `exit non-zero: ${r.tail}`;
+      console.log(`  BASELINE FAILS -- ${suite} (${why}). Every mutant naming it is UNVERIFIED below.`);
+    }
   }
 }
 console.log('');
@@ -1111,11 +1210,19 @@ function runMutants(list, file, base) {
     if (missingSuites.has(m.suite)) {
       console.log(`  NO SUITE ${m.what}  (${m.suite} does not exist)`);
       noSuite.push(m.what + ` [${m.suite}]`);
+      reportMutants.push({ what: m.what, suite: m.suite, verdict: 'no suite' });
+      continue;
+    }
+    if (brokenSuites.has(m.suite)) {
+      console.log(`  UNVERIFIED ${m.what}  (${m.suite} fails on unmutated code)`);
+      unverified.push(m.what + ` [${m.suite}]`);
+      reportMutants.push({ what: m.what, suite: m.suite, verdict: 'unverified' });
       continue;
     }
     if (!base.includes(m.from)) {
       console.log(`  SKIPPED  ${m.what}  (the code it patches has moved)`);
       survived.push(m.what + ' [pattern not found]');
+      reportMutants.push({ what: m.what, suite: m.suite, verdict: 'skipped (pattern not found)' });
       continue;
     }
     inFlight = { file, base, mirror };
@@ -1140,16 +1247,91 @@ function runMutants(list, file, base) {
         mirrorPatched = false;
       }
     }
-    let failed = false;
-    try { execFileSync('node', [path.join(__dirname, m.suite)], { stdio: 'pipe' }); }
-    catch { failed = true; }
+    const r = runSuiteRetrying(path.join(__dirname, m.suite), { timeoutMs: mutantTimeoutMs(baselineMs[m.suite] || 0) }, {
+      onRetry: (x, i) => console.log(`  ... ${m.suite} hit an infrastructure error (${x.infra}); retrying (${i}/3) once the network is back, mutant still applied`), pause: waitForNetwork });
+    let failed = r.status === 'fail' && !r.infra;
+    /* A failure only counts as a catch if it could not have been the suite's
+     * own bad day. Two kinds of failure are cheap to fake by accident: a suite
+     * that has been seen to flake (FLAKY above), and a suite that died without
+     * failing any check (a wait that timed out is exactly what a slow machine
+     * produces too). Those are run a second time, mutant still applied; it is a
+     * catch only if the second run fails as well. */
+    let confirm = null;
+    const crashOnly = failed && !(r.firstFailure && r.firstFailure.kind === 'check');
+    if (failed && (crashOnly || flakySuites.has(m.suite))) {
+      const r2 = runSuiteRetrying(path.join(__dirname, m.suite), { timeoutMs: mutantTimeoutMs(baselineMs[m.suite] || 0) });
+      confirm = { failedAgain: r2.status === 'fail' && !r2.infra, same: !!(r2.firstFailure && r.firstFailure && r2.firstFailure.text === r.firstFailure.text) };
+      if (!confirm.failedAgain) failed = false;
+    }
     restoreInFlight();
     const mirrorNote = mirrorPatched === false
       ? `  [served ${path.basename(mirror)} does not contain this pattern -- only ROOT was mutated; a browser-driven result here may not mean what it looks like]`
       : '';
-    if (failed) { caught++; console.log(`  caught   ${m.what}  (${m.suite})${mirrorNote}`); }
-    else { survived.push(m.what + (mirrorNote ? ' [mirror not patched]' : '')); console.log(`  SURVIVED ${m.what}  (${m.suite})${mirrorNote}`); }
+    if (confirm && !confirm.failedAgain) {
+      // Failed once, passed the second time, with the same mutation applied: the
+      // failure was the suite's, not the mutant's. Not a catch.
+      console.log(`  INCONSISTENT ${m.what}  (${m.suite}: failed once, then passed with the mutant still applied) -- NOT counted as caught`);
+      inconsistent.push(m.what + ` [${m.suite}]`);
+      reportMutants.push({ what: m.what, suite: m.suite, verdict: 'inconsistent (failed once, passed once)', ms: r.ms, first: r.firstFailure });
+    }
+    else if (r.status === 'fail' && r.infra) {
+      // Died on the network on every attempt. That says nothing about the
+      // mutant; counting it as caught is exactly the mistake this harness was
+      // fixed for (claude/33-harness-counted-a-dead-suite-as-caught.md).
+      console.log(`  INCONCLUSIVE ${m.what}  (${m.suite}: ${r.infra}, after ${r.attempts} attempts) -- NOT counted as caught`);
+      inconclusive.push(m.what + ` [${m.suite}: ${r.infra}]`);
+      reportMutants.push({ what: m.what, suite: m.suite, verdict: 'inconclusive (infrastructure)', ms: r.ms, first: { kind: 'crash', text: r.infra } });
+    }
+    else if (r.status === 'timeout') {
+      // The suite never finished, so no assertion caught anything. Not counted
+      // as caught, and not a survivor either: it needs a human to look.
+      timedOut.push(m.what + ` [${m.suite}, gave up after ${fmt(r.ms)}]`);
+      reportMutants.push({ what: m.what, suite: m.suite, verdict: 'timed out', ms: r.ms });
+      console.log(`  TIMED OUT ${m.what}  (${m.suite}, gave up after ${fmt(r.ms)})${mirrorNote}`);
+    }
+    else if (failed) {
+      caught++;
+      const ff = r.firstFailure;
+      console.log(`  caught   ${m.what}  (${m.suite}, ${fmt(r.ms)})${mirrorNote}`);
+      console.log(ff && ff.kind === 'check'
+        ? `             first failing check: ${ff.text}`
+        : `             NO CHECK FAILED -- the suite ${ff ? 'crashed: ' + ff.text : 'exited non-zero with no explanation'}`);
+      if (confirm) console.log(`             confirmed by a second run (${confirm.same ? 'same first failure' : 'a different first failure'})`);
+      reportMutants.push({ what: m.what, suite: m.suite, verdict: 'caught', ms: r.ms, first: ff, tally: r.tally, mirrorNote: !!mirrorNote, confirmed: !!confirm });
+    }
+    else { survived.push(m.what + (mirrorNote ? ' [mirror not patched]' : '')); console.log(`  SURVIVED ${m.what}  (${m.suite})${mirrorNote}`); reportMutants.push({ what: m.what, suite: m.suite, verdict: 'SURVIVED', ms: r.ms }); }
   }
+}
+
+/* mutation-report.md: what this run measured, per suite and per mutant, with the
+ * first failing check for each mutant that was caught. Regenerated on every run;
+ * everything in it except the date is a fact about the code, so a diff between two
+ * runs is a change in what the tests notice. Written before any non-zero exit. */
+function writeReport() {
+  const esc = t => String(t == null ? '' : t).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  const counts = v => reportMutants.filter(x => x.verdict === v).length;
+  const judged = reportMutants.filter(x => ['caught', 'SURVIVED'].includes(x.verdict)).length;
+  const out = [];
+  out.push('# Mutation report', '');
+  out.push(`Generated by tools/mutate_backend.js on ${new Date().toISOString().slice(0, 10)}. Do not edit; rerun the harness.`, '');
+  out.push(`**${counts('caught')} of ${judged} mutants judged by a working suite were caught.** `
+    + `Survived: ${counts('SURVIVED')}. Unverified (suite fails on clean code): ${counts('unverified')}. `
+    + `Timed out: ${counts('timed out')}. Inconclusive (network): ${counts('inconclusive (infrastructure)')}. Inconsistent: ${reportMutants.filter(x => /^inconsistent/.test(x.verdict)).length}. No suite: ${counts('no suite')}. Skipped: ${reportMutants.filter(x => /^skipped/.test(x.verdict)).length}.`, '');
+  out.push('"Caught" means: the suite passed on unmutated code in this same run, and failed on the mutant. '
+    + 'The first failing check is the first `FAIL` line the suite printed, i.e. the first assertion that broke. '
+    + 'A mutant caught with **no failing check** was noticed only because the suite crashed.', '');
+  out.push('## Suites, on unmutated code', '', '| Suite | Result | Checks passed |', '|---|---|---|');
+  reportBaseline.forEach(b => out.push(`| ${b.suite} | ${b.status === 'pass' ? (b.flaky ? 'FLAKY (passed only on the second run)' : 'clean') : b.status.toUpperCase()} | ${b.tally ? `${b.tally.passed}/${b.tally.total}` : ''} |`));
+  out.push('', '## Mutants', '', '| Mutant | Suite | Result | First failing check |', '|---|---|---|---|');
+  reportMutants.forEach(x => {
+    const first = x.verdict !== 'caught' ? ''
+      : x.first && x.first.kind === 'check' ? esc(x.first.text)
+      : `**NO CHECK FAILED** -- ${x.first ? 'crashed: ' + esc(x.first.text) : 'exited non-zero, no explanation'}`;
+    out.push(`| ${esc(x.what)} | ${x.suite} | ${x.verdict}${x.mirrorNote ? ' (mirror not patched)' : ''}${x.confirmed ? ', confirmed by a second run' : ''} | ${first} |`);
+  });
+  out.push('');
+  try { fs.writeFileSync(path.join(__dirname, 'mutation-report.md'), out.join('\n')); console.log('\nwrote tools/mutation-report.md'); }
+  catch (e) { console.log('could not write mutation-report.md: ' + e.message); }
 }
 
 // MUTANTS/CODE excluded -- retired along with Code.gs.
@@ -1161,14 +1343,42 @@ runMutants(CSS_MUTANTS, CSS, cssOriginal);
 
 const total = APP_MUTANTS.length + WS_MUTANTS.length + WS_APP_MUTANTS.length
             + SW_MUTANTS.length + CSS_MUTANTS.length;
-console.log(`\n${caught} of ${total} broken guards were caught by the tests.`);
+console.log(`\n${caught} of ${total - noSuite.length - unverified.length - timedOut.length - inconclusive.length - inconsistent.length} broken guards that a working suite could judge were caught by the tests.`);
+/* Caught, but by a crash rather than by an assertion: the suite threw before or
+ * instead of failing a check. The mutant WAS noticed, so it still counts -- but
+ * nothing states what the guard is for, so these are listed to be looked at. */
+const byCrash = reportMutants.filter(x => x.verdict === 'caught' && !(x.first && x.first.kind === 'check'));
+if (byCrash.length) {
+  console.log(`\nCAUGHT BY A CRASH, NOT BY A CHECK (${byCrash.length}) -- counted above, but no assertion failed:`);
+  byCrash.forEach(x => console.log(`  ${x.what}  [${x.suite}]  ${x.first ? x.first.text : '(no error text)'}`));
+}
+writeReport();
+if (inconsistent.length) {
+  console.log(`\nINCONSISTENT (${inconsistent.length}) -- failed once and passed once against the same mutant, so the failure was not reliably the mutant's; not counted as caught:`);
+  inconsistent.forEach(s => console.log('  ' + s));
+}
+if (flakySuites.size) {
+  console.log(`\nFLAKY SUITES (${flakySuites.size}) -- failed a baseline and passed on the second run; every catch by these was confirmed by a second failure: ${[...flakySuites].join(', ')}`);
+}
+if (inconclusive.length) {
+  console.log(`\nINCONCLUSIVE (${inconclusive.length}) -- the suite could not reach its database or network, on every attempt; nothing was measured:`);
+  inconclusive.forEach(s => console.log('  ' + s));
+}
+if (unverified.length) {
+  console.log(`\nUNVERIFIED (${unverified.length}) -- the named suite fails on clean code, so nothing was measured:`);
+  unverified.forEach(s => console.log('  ' + s));
+}
 if (noSuite.length) {
   console.log(`\nNO SUITE TO RUN (${noSuite.length}, not counted above or below):`);
   noSuite.forEach(s => console.log('  ' + s));
+}
+if (timedOut.length) {
+  console.log(`\nTIMED OUT (${timedOut.length}) -- the suite hung on the mutant instead of failing; counted neither caught nor survived:`);
+  timedOut.forEach(s => console.log('  ' + s));
 }
 if (survived.length) {
   console.log('\nNOT ACTUALLY TESTED:');
   survived.forEach(s => console.log('  ' + s));
   process.exit(1);
 }
-if (noSuite.length) process.exit(1);
+if (noSuite.length || unverified.length || timedOut.length || inconclusive.length || inconsistent.length) process.exit(1);

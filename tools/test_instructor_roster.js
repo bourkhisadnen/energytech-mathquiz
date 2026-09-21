@@ -1,7 +1,8 @@
 /* The roster as an instructor sees it, and the admin control that decides.
  *
- * The rules live in the backend -- test_backend.js §14 proves them against the
- * real Code.gs. This suite is about the page: that an instructor is SHOWN the
+ * The rules live in the backend -- energytech-api's tests/roster.test.js proves
+ * them against Postgres (test_backend.js §14 did, against Code.gs, before it
+ * retired). This suite is about the page: that an instructor is SHOWN the
  * groups assigned to them and nothing else, that the controls they must not
  * use are not drawn, and that the admin can hand a group over and take it back.
  *
@@ -10,85 +11,131 @@
  * The backend now refuses that from a non-admin, so the page has to ask group
  * by group instead; §5 pins that it never makes the unscoped call, because a
  * page that did would look fine right up until someone relaxed the backend.
+ *
+ * Repointed for Phase 6, like the other browser suites: it now drives the app
+ * served by energytech-api's src/app.js against the real backend on
+ * TEST_DATABASE_URL (see test_roster.js's header for the shared mechanics). It
+ * used to load http://127.0.0.1:8901/index.html in a Linux chromium path and
+ * answer JSONP calls from an in-memory mock, so on this machine it could not
+ * even start -- and mutate_backend.js counted "could not start" as a caught
+ * mutation (claude/33-harness-counted-a-dead-suite-as-caught.md in
+ * energytech-api).
+ *
+ * What changed, and only this: the mock backend became seeded Postgres rows,
+ * the JSONP sign-in became the real login form, and "what the page asked for"
+ * is read off the wire instead of out of the mock. Every UI step and selector
+ * is as it was. Three things are deliberately stronger than the mock allowed:
+ * section 4 also checks the backend recorded the assignment, not just that the
+ * page sent it; section 6 checks the password the page shows really opens that
+ * trainee's account (the mock always said ABCD-2345); and the fixed sleeps are
+ * waits on the condition, because Postgres does not answer in the same tick.
  */
+const path = require('path');
 const { chromium } = require('playwright');
-const BASE = 'http://127.0.0.1:8901/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+// Must be required before src/app, so the app under test and these fixtures
+// land on the same (test) database -- see tests/helpers/db.js's own comment.
+const {
+  pool, resetDb, insertIntake, insertGroup, insertTrainee, insertInstructor, assignGroup,
+} = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage, verifyPassword } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
 const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`);
 
+/* The three groups the mock's roster held. Each gets two trainees -- one with a
+ * login, one without -- which is what the mock's trainee_list returned for
+ * whichever group was asked about, and what the assertions below count. The
+ * mock reported 24/19/21 trainees per group; nothing here reads those numbers,
+ * so the real rows are only as many as the checks need. Ids differ per group
+ * because the real backend, unlike the mock, keeps energytech_id unique. */
 const GROUPS = [
-  { intake: 'JAN26', name: 'G1', trainees: 24, withAccount: 22 },
-  { intake: 'JAN26', name: 'G2', trainees: 19, withAccount: 19 },
-  { intake: 'MAR26', name: 'G1', trainees: 21, withAccount: 20 }
+  { intake: 'JAN26', name: 'G1', trainees: [['ET1001', 'Ahmed Al-Rashid', true], ['ET1002', 'Bilal Hakim', false]] },
+  { intake: 'JAN26', name: 'G2', trainees: [['ET2001', 'Karim Saleh', true], ['ET2002', 'Layla Omar', false]] },
+  { intake: 'MAR26', name: 'G1', trainees: [['ET3001', 'Nadia Farouk', true], ['ET3002', 'Omar Haddad', false]] },
 ];
 
-/* A backend with just enough memory that assigning a group and reading the
- * roster back behaves like the real one. It filters exactly where Code.gs
- * filters, so the page cannot pass here by filtering in the browser. */
-function backend(role, assignedAtStart) {
-  const state = { assigned: assignedAtStart ? assignedAtStart.slice() : [], calls: [] };
-  state.handle = (q) => {
-    state.calls.push(q);
-    const admin = role === 'admin';
-    const asPairs = () => state.assigned.map(k => ({ intake: k.split('/')[0], group: k.split('/')[1] }));
-    switch (q.action) {
-      case 'auth_login':
-        return { ok: true, token: 'T', username: admin ? 'adnen' : 'sara',
-                 displayName: admin ? 'Adnane Khalifa' : 'Sara Nasser', role };
-      case 'roster_list': {
-        const vis = admin ? GROUPS : GROUPS.filter(g => state.assigned.includes(g.intake + '/' + g.name));
-        return { ok: true,
-          intakes: [...new Set(vis.map(g => g.intake))].map(l => ({ label: l, status: 'active' })),
-          groups: vis,
-          viewer: { username: admin ? 'adnen' : 'sara', role, canEdit: admin,
-                    assignedGroups: admin ? null : asPairs() } };
-      }
-      case 'trainee_list': {
-        if (!admin && (!q.intake || !q.group)) return { ok: false, error: 'Name the intake and group.' };
-        if (!admin && !state.assigned.includes(q.intake + '/' + q.group)) {
-          return { ok: false, error: 'That group is not assigned to you.' };
-        }
-        return { ok: true, trainees: [
-          { energytechId: 'ET1001', name: 'Ahmed Al-Rashid', intake: q.intake || 'JAN26', group: q.group || 'G1', accountStatus: 'active' },
-          { energytechId: 'ET1002', name: 'Bilal Hakim', intake: q.intake || 'JAN26', group: q.group || 'G1', accountStatus: 'none' }
-        ] };
-      }
-      case 'admin_list_instructors':
-        return { ok: true, instructors: [
-          { username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin', status: 'approved', assignedGroups: [] },
-          { username: 'sara', displayName: 'Sara Nasser', role: 'instructor', status: 'approved', assignedGroups: asPairs() }
-        ] };
-      case 'admin_set_instructor_groups':
-        state.assigned = String(q.groups || '').split(';').filter(Boolean);
-        return { ok: true, username: q.username, assignedGroups: asPairs() };
-      case 'admin_reset_trainee_password':
-        return { ok: true, energytechId: q.energytechId, name: 'Ahmed Al-Rashid', temporaryPassword: 'ABCD-2345' };
-      default:
-        return { ok: true, message: 'mock' };
+/* Rebuilds the database for one scenario: the same instructors the mock
+ * hardcoded (adnen the admin, sara the instructor), the three groups, and
+ * sara's assignments. The real backend filters where Code.gs filtered, in SQL,
+ * so a page that filtered in the browser instead would still show nothing here
+ * that the backend did not send -- the mock had to promise that; Postgres
+ * simply does it. */
+async function seed(role, assignedAtStart) {
+  await resetDb();
+  const pw = await hashPasswordForStorage('x');
+  const cred = { passwordHash: pw.passwordHash, passwordSalt: pw.passwordSalt, passwordAlgo: pw.passwordAlgo };
+  await insertInstructor({ username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin', status: 'approved', ...cred });
+  await insertInstructor({ username: 'sara', displayName: 'Sara Nasser', role: 'instructor', status: 'approved', ...cred });
+  const intakes = {};
+  const groupIds = {};
+  for (const g of GROUPS) {
+    if (!intakes[g.intake]) intakes[g.intake] = await insertIntake(g.intake);
+    const gid = await insertGroup(intakes[g.intake], g.name);
+    groupIds[g.intake + '/' + g.name] = gid;
+    for (const [id, name, active] of g.trainees) {
+      await insertTrainee({
+        energytechId: id, name, intakeId: intakes[g.intake], groupId: gid,
+        accountStatus: active ? 'active' : 'none', ...(active ? cred : {}),
+      });
     }
-  };
-  return state;
+  }
+  for (const key of assignedAtStart) await assignGroup('sara', groupIds[key]);
+  return { role };
 }
 
+const assignedNow = async () => (await pool.query(
+  `SELECT ik.label || '/' || g.name AS key
+     FROM instructor_group_assignments a
+     JOIN groups g ON g.id = a.group_id JOIN intakes ik ON ik.id = g.intake_id
+    WHERE a.username = 'sara' ORDER BY 1`)).rows.map(r => r.key);
+
+/* Signs in through the real login form and hands back the page plus a log of
+ * every call it makes to /api/call. The mock's `state.calls` was the record of
+ * what the page asked for; a request listener is the same record, taken from
+ * the wire instead of from inside a fake. */
 async function signIn(ctx, state, who) {
   const page = await ctx.newPage();
-  page.on('pageerror', e => { throw e; });
-  await page.route(/script\.google\.com/, r => {
-    const q = Object.fromEntries(new URL(r.request().url()).searchParams);
-    return r.fulfill({ status: 200, contentType: 'application/javascript',
-                       body: `${q.callback}(${JSON.stringify(state.handle(q))});` });
+  state.calls = [];
+  state.errs = state.errs || [];
+  page.on('pageerror', e => state.errs.push(String(e)));
+  page.on('request', req => {
+    if (req.method() !== 'POST' || !req.url().endsWith('/api/call')) return;
+    try { state.calls.push(JSON.parse(req.postData() || '{}')); } catch { /* not JSON */ }
   });
-  await page.goto(BASE);
+  await page.goto(state.BASE);
   await page.click('#teacherModeBtn');
   await page.fill('#teacherLoginUsername', who);
   await page.fill('#teacherLoginPassword', 'x');
   await page.click('#teacherLoginBtn');
   await page.waitForSelector('#teacherInterface:not([hidden])');
-  await page.waitForTimeout(500);
+  // The roster card is loaded once its intake pane says anything at all, be it
+  // the list or "no groups are assigned to you".
+  await page.waitForFunction(() => document.getElementById('intakeList').textContent.trim().length > 0,
+    null, { timeout: CEILING });
   return page;
+}
+
+/* The mock answered in the same tick, so this file used to sleep a fixed 300-900ms
+ * after each click and read the page. Postgres over the network does not answer
+ * on a schedule, and a sleep that is long enough today is a flaky failure next
+ * month (test_roster.js polls for the same reason). So every wait below is on
+ * the thing being waited for, with a generous ceiling -- a real failure still
+ * fails, it just takes the ceiling to say so. */
+const CEILING = 15000;
+async function until(fn, what) {
+  const start = Date.now();
+  while (Date.now() - start < CEILING) {
+    if (await fn()) return true;
+    await new Promise(r => setTimeout(r, 100));
+  }
+  console.log(`  (gave up waiting for ${what} after ${CEILING}ms)`);
+  return false;
 }
 
 const controls = page => page.evaluate(() => ({
@@ -107,17 +154,20 @@ const controls = page => page.evaluate(() => ({
 
 const drillIn = async page => {
   await page.click('#intakeList .pane-item');
-  await page.waitForTimeout(300);
+  await page.waitForSelector('#groupList .pane-item', { timeout: CEILING });
   await page.click('#groupList .pane-item');
-  await page.waitForTimeout(500);
+  await page.waitForSelector('#traineeList .roster-table tbody tr', { timeout: CEILING });
 };
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: EXEC });
+  const server = app.listen(0);
+  const BASE = `http://127.0.0.1:${server.address().port}/index.html`;
+  const errs = [];
+  const browser = await chromium.launch();
 
   console.log('\n=== 1. An instructor with a group assigned sees it, read-only ===');
   {
-    const state = backend('instructor', ['JAN26/G1']);
+    const state = await seed('instructor', ['JAN26/G1']); state.BASE = BASE; state.errs = errs;
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
     const page = await signIn(ctx, state, 'sara');
     ok((await controls(page)).cardShown, 'the roster card is shown to a non-admin at all -- it used to be hidden');
@@ -142,7 +192,7 @@ const drillIn = async page => {
 
   console.log('\n=== 2. An instructor with nothing assigned ===');
   {
-    const state = backend('instructor', []);
+    const state = await seed('instructor', []); state.BASE = BASE; state.errs = errs;
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
     const page = await signIn(ctx, state, 'sara');
     const c = await controls(page);
@@ -156,7 +206,7 @@ const drillIn = async page => {
 
   console.log('\n=== 3. The admin still has the whole roster ===');
   {
-    const state = backend('admin', []);
+    const state = await seed('admin', []); state.BASE = BASE; state.errs = errs;
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
     const page = await signIn(ctx, state, 'adnen');
     const panes = await page.evaluate(() =>
@@ -183,11 +233,11 @@ const drillIn = async page => {
 
   console.log('\n=== 4. The admin hands a group over, and takes it back ===');
   {
-    const state = backend('admin', []);
+    const state = await seed('admin', []); state.BASE = BASE; state.errs = errs;
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
     const page = await signIn(ctx, state, 'adnen');
     await page.click('#loadInstructorAccountsBtn');
-    await page.waitForTimeout(500);
+    await page.waitForSelector('#instructorAccountsOutput tr .covers-cell', { timeout: CEILING });
     const before = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('#instructorAccountsOutput tr')];
       const sara = rows.find(r => r.textContent.includes('sara'));
@@ -201,17 +251,25 @@ const drillIn = async page => {
     ok(!before.adminHasButton, 'and offers no control to assign an admin groups they would not use');
 
     await page.click('.account-groups-btn');
-    await page.waitForTimeout(400);
+    await page.waitForSelector('.covers-box', { timeout: CEILING });
     const offered = await page.evaluate(() =>
       [...document.querySelectorAll('.covers-box')].map(b => b.value));
     eq(offered, ['JAN26/G1', 'JAN26/G2', 'MAR26/G1'], 'the editor offers every group in the centre');
     await page.check('.covers-box[value="JAN26/G1"]');
     await page.check('.covers-box[value="MAR26/G1"]');
     await page.click('.save-groups');
-    await page.waitForTimeout(600);
+    await until(async () => (await assignedNow()).length === 2, 'the two groups to be recorded');
     const sent = state.calls.filter(c => c.action === 'admin_set_instructor_groups').pop();
     eq(sent.groups, 'JAN26/G1;MAR26/G1', 'the two ticked groups are sent, as one string');
     eq(sent.username, 'sara', 'for the right instructor');
+    eq(await assignedNow(), ['JAN26/G1', 'MAR26/G1'], 'and the backend really recorded both -- not just the request');
+    // The backend answers, THEN the row redraws -- the database can hold the
+    // change a moment before the page shows it (this read raced that gap and
+    // came back empty on a mutation run). Wait for the redraw; the editor is
+    // only reachable again once it has happened.
+    await page.waitForFunction(() => [...document.querySelectorAll('#instructorAccountsOutput tr')]
+      .some(r => r.textContent.includes('sara') && r.querySelector('.covers-chip')), null, { timeout: CEILING })
+      .catch(() => { /* the check below reports it */ });
     const after = await page.evaluate(() => {
       const row = [...document.querySelectorAll('#instructorAccountsOutput tr')]
         .find(r => r.textContent.includes('sara'));
@@ -220,23 +278,32 @@ const drillIn = async page => {
     eq(after, ['JAN26/G1', 'MAR26/G1'], 'and the row now shows what she covers');
 
     await page.click('.account-groups-btn');
-    await page.waitForTimeout(400);
+    await page.waitForSelector('.covers-box', { timeout: CEILING });
     await page.uncheck('.covers-box[value="MAR26/G1"]');
     await page.uncheck('.covers-box[value="JAN26/G1"]');
     await page.click('.save-groups');
-    await page.waitForTimeout(600);
+    await until(async () => (await assignedNow()).length === 0, 'her cover to end');
     eq(state.calls.filter(c => c.action === 'admin_set_instructor_groups').pop().groups, '',
       'unticking everything sends an empty list, which is how cover ends');
+    eq(await assignedNow(), [], 'and the backend really ends her cover');
     await ctx.close();
   }
 
   console.log('\n=== 5. The search never asks for the whole centre ===');
   {
-    const state = backend('instructor', ['JAN26/G1', 'MAR26/G1']);
+    const state = await seed('instructor', ['JAN26/G1', 'MAR26/G1']); state.BASE = BASE; state.errs = errs;
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
     const page = await signIn(ctx, state, 'sara');
     await page.fill('#rosterSearch', 'Ahmed');
-    await page.waitForTimeout(900);
+    // The index is built one group at a time, so wait for both of hers to be
+    // asked about (and for the answer to reach the page) rather than for a
+    // fixed while. If the page never asks, this runs to the ceiling and the
+    // checks below fail as they should.
+    await until(async () => {
+      const asked = new Set(state.calls.filter(c => c.action === 'trainee_list').map(c => `${c.intake}/${c.group}`));
+      return asked.has('JAN26/G1') && asked.has('MAR26/G1')
+        && /Ahmed Al-Rashid/.test(await page.evaluate(() => document.getElementById('traineeList').textContent));
+    }, 'the search index to be built');
     const listCalls = state.calls.filter(c => c.action === 'trainee_list');
     const unscoped = listCalls.filter(c => !c.intake || !c.group);
     eq(unscoped.length, 0, 'not one unscoped trainee_list -- the backend would refuse it, and the page must not rely on that');
@@ -250,21 +317,37 @@ const drillIn = async page => {
 
   console.log('\n=== 6. Resetting a password is still offered to the instructor ===');
   {
-    const state = backend('instructor', ['JAN26/G1']);
+    const state = await seed('instructor', ['JAN26/G1']); state.BASE = BASE; state.errs = errs;
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
     const page = await signIn(ctx, state, 'sara');
     await drillIn(page);
     page.once('dialog', d => d.accept());
     await page.click('.trainee-reset-pw');
-    await page.waitForTimeout(600);
+    await page.waitForFunction(() => /\b[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}\b/.test(document.body.textContent),
+      null, { timeout: CEILING }).catch(() => { /* the check below reports it */ });
     const call = state.calls.filter(c => c.action === 'admin_reset_trainee_password').pop();
     ok(call && call.energytechId === 'ET1001', 'the reset reaches the backend for the right trainee');
+    // The mock always answered ABCD-2345. The real backend makes up a new
+    // password each time, so the check is stronger, not weaker: what the page
+    // shows must be a temporary password, and must be the one that now opens
+    // that trainee's account.
     const shown = await page.evaluate(() => document.body.textContent);
-    ok(/ABCD-2345/.test(shown), 'and the temporary password is shown to read out');
+    const shownPw = (shown.match(/\b[A-HJKMNP-Z2-9]{4}-[A-HJKMNP-Z2-9]{4}\b/) || [])[0];
+    ok(!!shownPw, `and a temporary password is shown to read out (${shownPw})`);
+    const row = (await pool.query(
+      `SELECT password_hash AS "passwordHash", password_salt AS "passwordSalt", password_algo AS "passwordAlgo",
+              must_change_password AS must FROM trainees WHERE energytech_id = 'ET1001'`)).rows[0];
+    ok(shownPw && await verifyPassword(shownPw, row), 'which really is now that trainee\'s password');
+    ok(row.must, 'and they will be made to choose their own on first use');
     await ctx.close();
   }
 
+  console.log('\n=== 7. No page errors ===');
+  eq(errs, [], 'no uncaught error on any page above');
+
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:\n - ' + failures.join('\n - ')); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });

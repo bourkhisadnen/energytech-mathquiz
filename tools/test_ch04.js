@@ -13,12 +13,32 @@
  * stored under 'original_pdf' from the start -- unlike Chapter 12A, this
  * chapter never went through a 'version_a' detour, per the user's explicit
  * instruction to key it that way from the outset.
+ *
+ * Repointed for Phase 6, like the other browser suites: the app is loaded from
+ * energytech-api's src/app.js (which serves public/), signed in through the real
+ * login against the test database, and the teacher's answer key is read from
+ * the copy committed at tools/ch04/worksheets/Ch04_answer_key.tex, not from a
+ * chat upload path that only ever existed on the machine that wrote this. It
+ * used to load a static server on port 8902 from a Linux chromium path and
+ * answer JSONP calls from a mock, so on this machine it could not start -- and
+ * mutate_backend.js counted "could not start" as a caught mutation
+ * (claude/33-harness-counted-a-dead-suite-as-caught.md). Every page-side check
+ * is unchanged.
  */
+const path = require('path');
 const { chromium } = require('playwright');
 const fs = require('fs');
-const BASE = 'http://127.0.0.1:8902/energytech-mathquiz/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
-const UPLOAD = '/root/.claude/uploads/31b6d1fd-3b78-5915-86b3-6a23229c570d';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+// Must be required before src/app, so the app under test and these fixtures
+// land on the same (test) database -- see tests/helpers/db.js's own comment.
+const { pool, resetDb, insertInstructor } = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
+
+const KEY_TEX = path.join(__dirname, 'ch04', 'worksheets', 'Ch04_answer_key.tex');
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
@@ -26,7 +46,7 @@ const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got $
 
 /* The key exactly as the teacher wrote it, read from the LaTeX source. */
 function officialKey() {
-  const txt = fs.readFileSync(`${UPLOAD}/83a499d5-Ch04_answer_key.tex`, 'utf8');
+  const txt = fs.readFileSync(KEY_TEX, 'utf8');
   const out = {};
   for (const line of txt.split('\n')) {
     const m = line.match(/^\s*(\d+)\s*&\s*([A-D])\s*&\s*([A-D])\s*&\s*([A-D])\s*\\\\/);
@@ -36,7 +56,16 @@ function officialKey() {
 }
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: EXEC });
+  await resetDb();
+  const pw = await hashPasswordForStorage('x');
+  await insertInstructor({
+    username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin', status: 'approved',
+    passwordHash: pw.passwordHash, passwordSalt: pw.passwordSalt, passwordAlgo: pw.passwordAlgo,
+  });
+  const server = app.listen(0);
+  const BASE = `http://127.0.0.1:${server.address().port}/index.html`;
+
+  const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
   const errs = [];
   page.on('pageerror', e => errs.push(String(e)));
@@ -44,15 +73,6 @@ function officialKey() {
 
   const missing = [];
   page.on('response', r => { if (r.status() >= 400) missing.push(r.url()); });
-
-  await page.route(/script\.google\.com/, r => {
-    const q = Object.fromEntries(new URL(r.request().url()).searchParams);
-    const data = q.action === 'auth_login'
-      ? { ok: true, token: 'T', username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin' }
-      : q.action === 'roster_list' ? { ok: true, intakes: [], groups: [] }
-      : { ok: true, message: 'mock' };
-    return r.fulfill({ status: 200, contentType: 'application/javascript', body: `${q.callback}(${JSON.stringify(data)});` });
-  });
 
   await page.goto(BASE);
   await page.click('#teacherModeBtn');
@@ -343,6 +363,8 @@ function officialKey() {
   eq(errs, [], 'no console or page errors');
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
   if (failures.length) { console.log('FAILURES:'); failures.forEach(f => console.log(' - ' + f)); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });

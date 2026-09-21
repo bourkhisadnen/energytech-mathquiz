@@ -18,12 +18,44 @@
  * teacher sent, rather than against anything the build produced -- if the
  * build ever mangles a key, the answer sheet the trainees are marked against
  * is what catches it.
+ *
+ * Repointed for Phase 6, like the other browser suites: the app is loaded from
+ * energytech-api's src/app.js (which serves public/), signed in through the real
+ * login against the test database. It used to load a static server on port 8902
+ * from a Linux chromium path and answer JSONP calls from a mock, so on this
+ * machine it could not start -- and mutate_backend.js counted "could not start"
+ * as a caught mutation (claude/33-harness-counted-a-dead-suite-as-caught.md).
+ * Every page-side check is unchanged.
+ *
+ * ONE SECTION IS SKIPPED, LOUDLY, AND WHY MATTERS. Section 3 compares the bank
+ * to the teacher's own Ch12_answer_key.tex, which was a chat upload
+ * (/root/.claude/uploads/...) and is not in either repository. Without that file
+ * the comparison has nothing to compare against, and comparing the bank to a
+ * copy of the bank would pass whatever the bank said. So the section prints
+ * SKIPPED and the run ends by saying so; it does not pass. To run it, point
+ * CH12_ANSWER_KEY_TEX at the file (or commit it as
+ * tools/ch12a/reference/Ch12_answer_key.tex). None of the mutations this suite
+ * is named for touches the key -- they are about the chapter's own key
+ * ('ch12a' vs 'ch12'), the paper registry, segment bars, Heron's formula and the
+ * radicand -- so the skip does not weaken what they prove; it does mean the
+ * teacher's key is presently unchecked by anything.
  */
+const path = require('path');
 const { chromium } = require('playwright');
 const fs = require('fs');
-const BASE = 'http://127.0.0.1:8902/energytech-mathquiz/index.html';
-const EXEC = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
-const UPLOAD = '/root/.claude/uploads/31b6d1fd-3b78-5915-86b3-6a23229c570d';
+
+const ENERGYTECH_API_ROOT = path.join(__dirname, '..', '..', 'energytech-api');
+require('dotenv').config({ path: path.join(ENERGYTECH_API_ROOT, '.env') });
+
+// Must be required before src/app, so the app under test and these fixtures
+// land on the same (test) database -- see tests/helpers/db.js's own comment.
+const { pool, resetDb, insertInstructor } = require(path.join(ENERGYTECH_API_ROOT, 'tests', 'helpers', 'db'));
+const { hashPasswordForStorage } = require(path.join(ENERGYTECH_API_ROOT, 'src', 'lib', 'passwords'));
+const app = require(path.join(ENERGYTECH_API_ROOT, 'src', 'app'));
+
+const KEY_TEX = [process.env.CH12_ANSWER_KEY_TEX, path.join(__dirname, 'ch12a', 'reference', 'Ch12_answer_key.tex')]
+  .filter(Boolean).find(f => fs.existsSync(f)) || null;
+const skipped = [];
 
 let failures = [], checks = 0;
 const ok = (c, l) => { checks++; console.log((c ? '  PASS  ' : '  FAIL  ') + l); if (!c) failures.push(l); };
@@ -31,7 +63,7 @@ const eq = (a, b, l) => ok(JSON.stringify(a) === JSON.stringify(b), `${l} (got $
 
 /* The key exactly as the teacher wrote it, read from the LaTeX source. */
 function officialKey() {
-  const txt = fs.readFileSync(`${UPLOAD}/5e6c7048-Ch12_answer_key.tex`, 'utf8');
+  const txt = fs.readFileSync(KEY_TEX, 'utf8');
   const out = {};
   for (const line of txt.split('\n')) {
     const m = line.match(/^\s*(\d+)\s*&\s*([A-D])\s*&\s*([A-D])\s*&\s*([A-D])\s*\\\\/);
@@ -41,7 +73,16 @@ function officialKey() {
 }
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: EXEC });
+  await resetDb();
+  const pw = await hashPasswordForStorage('x');
+  await insertInstructor({
+    username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin', status: 'approved',
+    passwordHash: pw.passwordHash, passwordSalt: pw.passwordSalt, passwordAlgo: pw.passwordAlgo,
+  });
+  const server = app.listen(0);
+  const BASE = `http://127.0.0.1:${server.address().port}/index.html`;
+
+  const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
   const errs = [];
   page.on('pageerror', e => errs.push(String(e)));
@@ -49,15 +90,6 @@ function officialKey() {
 
   const missing = [];
   page.on('response', r => { if (r.status() >= 400) missing.push(r.url()); });
-
-  await page.route(/script\.google\.com/, r => {
-    const q = Object.fromEntries(new URL(r.request().url()).searchParams);
-    const data = q.action === 'auth_login'
-      ? { ok: true, token: 'T', username: 'adnen', displayName: 'Adnane Khalifa', role: 'admin' }
-      : q.action === 'roster_list' ? { ok: true, intakes: [], groups: [] }
-      : { ok: true, message: 'mock' };
-    return r.fulfill({ status: 200, contentType: 'application/javascript', body: `${q.callback}(${JSON.stringify(data)});` });
-  });
 
   await page.goto(BASE);
   await page.click('#teacherModeBtn');
@@ -96,8 +128,6 @@ function officialKey() {
   eq(keys.unknown.chapterKey, 'ch12', 'and so does a key naming a chapter that does not exist');
 
   console.log('\n=== 3. The supplied answer key, checked against the teacher\'s own file ===');
-  const official = officialKey();
-  eq(Object.keys(official).length, 82, 'the file lists 82 answers');
   const stored = await page.evaluate(() => {
     const out = {};
     for (const [setid, set] of Object.entries(QUESTION_BANK_SETS_CH12A)) {
@@ -105,10 +135,17 @@ function officialKey() {
     }
     return out;
   });
-  for (const v of ['version_b', 'version_c', 'version_d']) {
-    const wrong = [];
-    for (let n = 1; n <= 82; n++) if (stored[v][n] !== official[n][v]) wrong.push(n);
-    ok(wrong.length === 0, `${v} matches the sheet the teacher sent${wrong.length ? ' (differs on Q' + wrong.join(', Q') + ')' : ''}`);
+  if (!KEY_TEX) {
+    console.log('  SKIPPED  the teacher\'s Ch12_answer_key.tex is not available (see this file\'s header); NOT counted as a pass');
+    skipped.push('section 3: the bank\'s B/C/D keys against the teacher\'s Ch12_answer_key.tex');
+  } else {
+    const official = officialKey();
+    eq(Object.keys(official).length, 82, 'the file lists 82 answers');
+    for (const v of ['version_b', 'version_c', 'version_d']) {
+      const wrong = [];
+      for (let n = 1; n <= 82; n++) if (stored[v][n] !== official[n][v]) wrong.push(n);
+      ok(wrong.length === 0, `${v} matches the sheet the teacher sent${wrong.length ? ' (differs on Q' + wrong.join(', Q') + ')' : ''}`);
+    }
   }
 
   console.log('\n=== 4. The original worksheet, whose key was derived rather than supplied ===');
@@ -298,6 +335,9 @@ function officialKey() {
   eq(errs, [], 'no console or page errors');
 
   await browser.close();
+  server.close();
+  await pool.end();
   console.log(`\n${checks - failures.length}/${checks} checks passed`);
+  if (skipped.length) { console.log('SKIPPED, not passed:'); skipped.forEach(f => console.log(' - ' + f)); }
   if (failures.length) { console.log('FAILURES:'); failures.forEach(f => console.log(' - ' + f)); process.exit(1); }
-})();
+})().catch(e => { console.error(e); process.exit(1); });

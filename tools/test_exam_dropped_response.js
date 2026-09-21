@@ -134,12 +134,38 @@ async function sitAndSubmit(browser, behaviour, sessionCode) {
     if (el) el.click();
   }));
   await p.click('#studentSubmitBtn');
-  await p.waitForTimeout(3400);            // the read-back waits ~1.8s first
+  // This used to be a fixed 3.4s sleep ("the read-back waits ~1.8s first").
+  // That was enough for the mock and is not enough for a real Postgres write of
+  // thirty item responses followed by the read-back: about one run in four read
+  // the panel too early, failed section 1 for a reason that had nothing to do
+  // with the code under test, and -- worse for the mutation harness -- made this
+  // suite look broken on clean code.
+  //
+  // "Not still saying Submitting..." is NOT enough of a signal: the success
+  // message ("Your answers have been submitted...") appears first and the
+  // read-back's verdict is appended to it afterwards, so a wait that stopped at
+  // the first non-progress text read the panel before the very thing under test
+  // had spoken (tried; failed every run). The read-back's verdict is one of the
+  // four endings below. A page that never reaches one -- which is exactly what
+  // the "success is only assumed" mutation does -- is given the panel staying
+  // unchanged for 4s instead, and the checks below then say what is missing.
+  const VERDICT = /Recorded\.|may not have been recorded|Could not confirm|Submission failed/i;
+  const IN_PROGRESS = /Submitting result|Checking whether it was recorded/i;
+  let last = null, since = Date.now();
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const t = ((await p.textContent('#studentFeedback')) || '').replace(/\s+/g, ' ').trim();
+    if (VERDICT.test(t)) break;
+    if (t !== last) { last = t; since = Date.now(); }
+    else if (t && !IN_PROGRESS.test(t) && Date.now() - since >= 4000) break;
+    await p.waitForTimeout(150);
+  }
   const out = {
     cls: await p.getAttribute('#studentFeedback', 'class'),
     text: (await p.textContent('#studentFeedback')).replace(/\s+/g, ' ').trim(),
     errs: errs.filter(e => !/Failed to load resource|ERR_FAILED|ERR_ABORTED/.test(e))
   };
+  await p.unrouteAll({ behavior: 'ignoreErrors' });   // a route.fetch still in flight must not crash the run when the page closes
   await p.close();
   return out;
 }
