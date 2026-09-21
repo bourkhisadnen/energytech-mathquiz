@@ -4,3 +4,5 @@ MIGRATION_TUTORIAL.md
 API_CONTRACT.md
 node_modules/
 tools/.mutation-snapshot/
+tools/.mutation-run.log
+tools/.mutation-run.exit
