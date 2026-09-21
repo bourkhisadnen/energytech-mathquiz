@@ -1,0 +1,53 @@
+# Publishes ONLY the app's own files to GitHub Pages.
+#
+# Pages deployed straight from the branch serves the whole repository, which put
+# tools/, google_apps_script/, README.md and package*.json on the live site. This
+# workflow deploys the output of tools/stage-site.js instead: the files listed under
+# "site" in tools/site-files.json, verified against the service worker's precache list.
+# The build FAILS, and the previous deployment stays live, if a file is not classified
+# there or the staged site is incomplete.
+#
+# THIS DOES NOTHING UNTIL the repository's Pages source is switched to GitHub Actions
+# (Settings -> Pages -> Build and deployment -> Source). Until then the deploy job fails
+# harmlessly and the branch-based deployment keeps serving. Order that is safe:
+#   1. Run this workflow once by hand (Actions -> Deploy site to GitHub Pages -> Run).
+#      Its "build" job must be green: it proves the site stages. "deploy" will fail.
+#   2. Switch the Pages source to GitHub Actions.
+#   3. Run the workflow again. From then on every push to main redeploys.
+name: Deploy site to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and let a running one finish rather than cancel it half-way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Stage the site
+        run: node tools/stage-site.js "$RUNNER_TEMP/site"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

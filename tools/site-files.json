@@ -1,0 +1,36 @@
+{
+  "_what": "Every top-level entry in this repository is one of the two lists below. `site` is what GitHub Pages serves; `developer` is never published. tools/stage-site.js builds the published tree from this and FAILS on an entry in neither list, so a new file has to be classified on purpose: a new question bank that is not added here fails the build (the previous deployment stays live) instead of going missing from the site, and a new developer file cannot be published by default.",
+  "site": [
+    ".nojekyll",
+    "index.html",
+    "app.js",
+    "style.css",
+    "service-worker.js",
+    "manifest.webmanifest",
+    "worksheet_tex.js",
+    "explanation_links.js",
+    "question_bank.js",
+    "question_bank_ch03.js",
+    "question_bank_ch04.js",
+    "question_bank_ch12a.js",
+    "apple-touch-icon.png",
+    "favicon-16.png",
+    "favicon-32.png",
+    "icon-192.png",
+    "icon-512.png",
+    "icon-maskable-512.png",
+    "images",
+    "figures_ch04",
+    "figures_ch12a"
+  ],
+  "developer": [
+    ".github",
+    ".gitattributes",
+    ".gitignore",
+    "README.md",
+    "package.json",
+    "package-lock.json",
+    "google_apps_script",
+    "tools"
+  ]
+}
