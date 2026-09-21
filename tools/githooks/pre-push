@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse a push while a mutation may be in the served sources. See tools/check-pristine.js.
+# Enable in a clone with:   git config core.hooksPath tools/githooks
+# Git feeds a pre-push hook the refs on stdin, and node inherits it.
+exec node "$(dirname "$0")/../check-pristine.js" --pre-push --repo mathquiz

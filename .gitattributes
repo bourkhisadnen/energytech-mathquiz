@@ -1,0 +1,5 @@
+# A git hook is run by sh, and a carriage return in its shebang or in an argument
+# breaks it silently on Windows, where autocrlf would otherwise add them.
+tools/githooks/* text eol=lf
+# cmd mis-parses labels and goto in a batch file that has bare LF line endings.
+*.cmd text eol=crlf
