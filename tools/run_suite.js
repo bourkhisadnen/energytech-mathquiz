@@ -41,7 +41,7 @@ function firstFailure(output) {
  * These suites talk to a Postgres on Railway, and when that host cannot be
  * reached (a dropped connection, DNS gone, the laptop asleep) a suite dies in a
  * second or two -- non-zero exit, the very thing "caught" means. A run reported
- * five mutants caught this way (getaddrinfo ENOTFOUND altaria.proxy.rlwy.net,
+ * five mutants caught this way (getaddrinfo ENOTFOUND db.example.invalid,
  * 1.3s each against a clean run of a minute). So an infrastructure error anywhere
  * in the output makes the result INCONCLUSIVE: retried, and never counted as a
  * catch. Returns the matching text, or null. */

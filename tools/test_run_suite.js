@@ -52,7 +52,7 @@ ok(firstFailure('FAILURES:\n - x') === null, 'the FAILURES summary is not itself
 ok(firstFailure('') === null && tallyOf('') === null, 'empty output yields nothing');
 
 // A suite that dies because the network is down proves nothing about the code.
-ok(/ENOTFOUND/.test(infrastructureError('Error: getaddrinfo ENOTFOUND altaria.proxy.rlwy.net')), 'a DNS failure is recognised as infrastructure');
+ok(/ENOTFOUND/.test(infrastructureError('Error: getaddrinfo ENOTFOUND db.example.invalid')), 'a DNS failure is recognised as infrastructure');
 ok(infrastructureError('connect ECONNREFUSED 127.0.0.1:5432'), 'and a refused connection');
 ok(infrastructureError('Error: Connection terminated unexpectedly'), 'and a dropped database connection');
 ok(infrastructureError('  FAIL  the roster is drawn as editable for everyone') === null, 'an ordinary failed check is not');
