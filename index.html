@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EnergyTech Mathematics Quiz App</title>
+  <title>EnergyTech Mathematics Quiz App has moved</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <!-- Without these every browser asks the server root for /favicon.ico and is
        told 404, on every load. Two sizes because 16px is what a browser tab
@@ -13,583 +13,56 @@
   <!-- iOS home screen. It ignores the manifest icons, ignores transparency,
        and paints unset pixels black, so this one is deliberately opaque. -->
   <link rel="apple-touch-icon" href="apple-touch-icon.png" />
-  <link rel="stylesheet" href="style.css" />
   <meta name="theme-color" content="#006fae" />
+  <!-- Belt and braces alongside the JS redirect below: a browser with
+       JavaScript off (or a crawler) still lands on the new address after a
+       few seconds instead of being stuck here. -->
+  <meta http-equiv="refresh" content="6;url=https://energytech-api-production.up.railway.app/" />
+  <style>
+    /* Inline and minimal on purpose -- style.css is the full app's stylesheet
+       and this page needs none of it. Colours match the app's own theme
+       (--brand from style.css) so the notice does not look like a different
+       product. */
+    :root { color-scheme: light; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #f4f7fb; color: #1a2733; padding: 24px; box-sizing: border-box;
+    }
+    main {
+      max-width: 480px; background: #fff; border-radius: 12px; padding: 32px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.06); text-align: center;
+    }
+    img { width: 96px; height: 96px; margin-bottom: 8px; }
+    h1 { font-size: 1.25rem; margin: 0 0 12px; }
+    p { line-height: 1.5; color: #445; }
+    a.button {
+      display: inline-block; margin-top: 16px; padding: 12px 28px; border-radius: 8px;
+      background: #006fae; color: #fff; text-decoration: none; font-weight: 600;
+    }
+    a.button:hover, a.button:focus { background: #00588a; }
+    .fineprint { margin-top: 20px; font-size: .85rem; color: #778; }
+  </style>
 </head>
 <body>
-  <header class="app-header">
-    <div class="header-brand">
-      <!-- alt is empty on purpose: the h1 beside it already says the app's
-           name, so a screen reader announcing the logo too would just repeat
-           itself. -->
-      <img class="app-logo" src="icon-192.png" alt="" width="192" height="192" />
-      <div>
-        <h1>EnergyTech Mathematics Quiz App</h1>
-        <p>Instructor-controlled sessions, trainee submission, and question analysis.</p>
-      </div>
-    </div>
-    <div class="header-actions">
-      <button id="homeBtn" class="secondary">Home</button>
-      <button id="installBtn" class="secondary" hidden>Install app</button>
-      <button id="printBtn" class="secondary">Print / Save PDF</button>
-    </div>
-  </header>
-
   <main>
-    <section class="panel landing-panel" id="landingPanel">
-      <h2>Choose your role</h2>
-      <p class="hint">Trainees take assigned quizzes using a session code. Instructors create sessions and monitor results.</p>
-      <div class="role-grid">
-        <button id="studentModeBtn" class="role-card">
-          <span class="role-title">Trainee</span>
-          <span class="role-subtitle">Enter your details and session code</span>
-        </button>
-        <button id="teacherModeBtn" class="role-card teacher-role">
-          <span class="role-title">Instructor</span>
-          <span class="role-subtitle">Create sessions and view dashboard</span>
-        </button>
-      </div>
-    </section>
-
-    <section class="panel teacher-login-panel" id="teacherLoginPanel" hidden>
-      <h2>Instructor login</h2>
-      <div class="grid student-grid">
-        <label>
-          Username
-          <input id="teacherLoginUsername" autocomplete="username" placeholder="Your instructor username" />
-        </label>
-        <label>
-          Password
-          <input id="teacherLoginPassword" type="password" autocomplete="current-password" placeholder="Your instructor password" />
-        </label>
-      </div>
-      <div class="button-row">
-        <button id="teacherLoginBtn">Log in</button>
-        <button id="toggleSignupBtn" class="secondary" type="button">Need an account? Request one</button>
-        <button id="backFromInstructorLoginBtn" class="secondary">Back</button>
-      </div>
-      <div id="teacherLoginStatus" class="feedback empty">Enter your instructor username and password to continue.</div>
-
-      <!-- Shown instead of the instructor interface when an admin has reset
-           this account: the temporary password gets them this far and no
-           further. The backend refuses everything else until it is changed. -->
-      <div id="teacherMustChangePanel" class="signup-panel must-change-panel" hidden>
-        <h3>Choose your own password</h3>
-        <p class="hint">Your password was reset by an admin, so the one you were given is temporary.
-          Choose your own before going on — nobody else knows it.</p>
-        <div class="grid student-grid">
-          <label>
-            New password
-            <input id="teacherForcedNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
-          </label>
-          <label>
-            Repeat it
-            <input id="teacherForcedConfirm" type="password" autocomplete="new-password" placeholder="The same again" />
-          </label>
-        </div>
-        <div class="button-row">
-          <button id="teacherForcedChangeBtn" type="button">Save my new password</button>
-        </div>
-        <div id="teacherForcedStatus" class="feedback empty" hidden></div>
-      </div>
-
-      <div id="teacherSignupPanel" class="signup-panel" hidden>
-        <h3>Request an instructor account</h3>
-        <p class="hint">An admin has to approve your request before you can log in.</p>
-        <div class="grid student-grid">
-          <label>
-            Your name
-            <input id="signupDisplayName" autocomplete="name" placeholder="e.g. Jane Carter" />
-          </label>
-          <label>
-            Choose a username
-            <input id="signupUsername" autocomplete="username" placeholder="e.g. jcarter" />
-          </label>
-          <label>
-            Choose a password
-            <input id="signupPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
-          </label>
-          <label>
-            Confirm password
-            <input id="signupConfirmPassword" type="password" autocomplete="new-password" placeholder="Repeat password" />
-          </label>
-        </div>
-        <div class="button-row">
-          <button id="requestAccountBtn" type="button">Request account</button>
-        </div>
-        <div id="signupStatus" class="feedback empty">Fill in the fields above and request an account.</div>
-      </div>
-    </section>
-
-    <section id="teacherInterface" hidden>
-      <section class="panel account-bar-panel">
-        <div class="account-bar">
-          <div id="instructorAccountBar">Logged in.</div>
-          <button id="logoutBtn" class="secondary" type="button">Log out</button>
-        </div>
-      </section>
-
-      <section class="panel setup-panel" id="setupPanel">
-        <h2>Create quiz session</h2>
-
-        <div class="selection-block">
-          <h3>1. Choose what the quiz covers</h3>
-          <p class="hint">Tick a whole chapter, a version, a lesson, or individual questions. You can mix chapters and versions in one quiz.</p>
-          <div class="button-row selection-actions">
-            <button type="button" id="selAllBtn" class="secondary">Select all</button>
-            <button type="button" id="selNoneBtn" class="secondary">Clear</button>
-            <button type="button" id="selExpandBtn" class="secondary">Expand all</button>
-            <button type="button" id="selCollapseBtn" class="secondary">Collapse all</button>
-          </div>
-          <div id="questionTree" class="question-tree"></div>
-          <div id="selectionSummary" class="feedback warn">Nothing selected yet.</div>
-        </div>
-
-        <h3>2. Session settings</h3>
-        <div class="grid setup-grid">
-          <label>
-            Session name
-            <input id="sessionName" placeholder="Named from your selection" />
-          </label>
-          <label>
-            Intake
-            <select id="sessionIntake"><option value="">— none —</option></select>
-          </label>
-          <label>
-            Group
-            <select id="sessionGroup"><option value="">— none —</option></select>
-          </label>
-          <label class="count-label">
-            Number of questions
-            <span class="count-control">
-              <button type="button" id="countMinusBtn" class="count-step" aria-label="One fewer question">−</button>
-              <input id="questionCount" type="number" min="1" max="1" value="30" inputmode="numeric" aria-label="Number of questions" />
-              <button type="button" id="countPlusBtn" class="count-step" aria-label="One more question">+</button>
-              <button type="button" id="countAllBtn" class="secondary count-all">All</button>
-            </span>
-            <input id="questionCountRange" type="range" min="1" max="1" value="30" class="count-range" aria-label="Number of questions slider" />
-            <span class="hint count-hint" id="countHint">select some questions first</span>
-          </label>
-          <label>
-            Random seed
-            <input id="seedInput" value="20260627" inputmode="numeric" />
-          </label>
-          <label>
-            Question order
-            <select id="orderMode">
-              <option value="original">Keep original order after selection</option>
-              <option value="shuffled">Shuffle selected questions</option>
-            </select>
-          </label>
-          <label>
-            Quiz mode
-            <select id="sessionMode">
-              <option value="practice" selected>Practice Mode — show score and feedback</option>
-              <option value="assessment">Assessment Mode — hide feedback from trainees</option>
-            </select>
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" id="showOriginalNumbers" checked />
-            Show original question numbers
-          </label>
-          <label class="checkbox-label">
-            <input type="checkbox" id="allowWalkIn" />
-            Allow trainees without an account to sit this one
-          </label>
-          <!-- Exams only: same questions for everyone, arranged differently for
-               each trainee. Hidden in practice mode, where copying is not the
-               problem being solved. -->
-          <label class="checkbox-label" id="shuffleEachLaunchRow" hidden>
-            <input type="checkbox" id="shuffleEachLaunch" />
-            Shuffle question and choice order for each trainee
-          </label>
-        </div>
-        <div class="require-note">Trainees must answer <strong>all questions</strong> before submitting.</div>
-        <div class="button-row">
-          <button id="createSessionBtn">Create session code</button>
-          <button id="previewSessionBtn" class="secondary">Preview teacher copy</button>
-          <button id="newSeedBtn" class="secondary">New seed</button>
-          <button id="copyReferenceBtn" class="secondary">Copy teacher reference</button>
-        </div>
-        <div id="sessionStatus" class="feedback empty">Create a session, then give the code to trainees.</div>
-
-        <!-- The same paper as a self-marking PDF worksheet. Hidden until there
-             is a session to export. -->
-        <div id="worksheetExport" class="worksheet-export" hidden>
-          <h3>Interactive worksheet</h3>
-          <p class="hint">The same questions as a self-marking PDF: one radio button per answer, a live
-            score, and a mastery table by objective. Overleaf compiles it in your browser — press
-            <strong>Recompile</strong> there, then download the PDF. Open the PDF in Adobe Acrobat
-            Reader; the marking is form JavaScript, which Chrome's own viewer does not run.</p>
-          <div class="button-row">
-            <button id="overleafExportBtn" type="button">Open in Overleaf</button>
-            <button id="texExportBtn" type="button" class="secondary">Download .tex</button>
-          </div>
-          <p class="worksheet-warning" id="worksheetWarning">
-            <strong>The answer key is inside the file.</strong> It has to be, for the PDF to mark
-            itself — anyone who opens the worksheet in a text editor can read it. Do not give this
-            file to trainees before they have sat the paper.</p>
-          <div id="worksheetExportStatus" class="feedback empty" hidden></div>
-        </div>
-      </section>
-
-      <section id="teacherPreviewArea" hidden>
-        <section id="quizSummary" class="quiz-summary" aria-live="polite"></section>
-        <section id="quizContainer" class="quiz-container"></section>
-
-        <section class="panel result-panel" id="resultPanel">
-          <h2>Instructor preview</h2>
-          <div class="button-row">
-            <button id="submitBtn">Check preview answers</button>
-            <button id="resetAnswersBtn" class="secondary">Clear answers</button>
-            <button id="downloadResultBtn" class="secondary">Download preview result</button>
-          </div>
-          <div id="feedback" class="feedback empty">Preview the quiz here before giving the code to trainees.</div>
-        </section>
-      </section>
-
-      <section class="panel dashboard-panel" id="dashboardPanel">
-        <h2>Instructor dashboard</h2>
-        <p class="hint">Load submitted results to identify lowest performers, problematic questions, and problematic lessons.</p>
-        <div class="button-row">
-          <button id="loadDashboardBtn">Load instructor dashboard</button>
-          <button id="downloadActivityBtn" class="secondary">⬇ Download trainee activity (CSV)</button>
-          <button id="exportDashboardCsvBtn" class="secondary">⬇ Download full analysis (CSV)</button>
-          <button id="testBackendBtn" class="secondary">Test backend connection</button>
-        </div>
-        <p class="hint">The tables below show only the weakest 20 trainees and 30 questions. Both downloads contain <strong>every</strong> row, not just what is on screen.</p>
-        <div id="dashboardStatus" class="feedback empty">Click <strong>Load instructor dashboard</strong> after trainees submit.</div>
-        <div id="teacherDashboard" class="dashboard-output"></div>
-      </section>
-
-      <!-- Exam marks stay hidden from trainees until they are released here. -->
-      <section class="panel dashboard-panel" id="sessionsPanel">
-        <div id="sessionsWorkspace">
-          <h2>My sessions</h2>
-          <p class="hint">Exam results are held back until you release them. Practice quizzes are visible to trainees straight away.</p>
-          <div class="button-row">
-            <button id="loadSessionsBtn">Load my sessions</button>
-          </div>
-          <div id="sessionsStatus" class="feedback empty">Click <strong>Load my sessions</strong> to see what you have run and release exam results.</div>
-          <div id="sessionsList"></div>
-        </div>
-
-        <!-- One session reported on in full. It replaces the list rather than
-             unfolding beneath it, so the per-trainee table and a paper opened
-             from it both get the width of the panel. -->
-        <section id="sessionReportView" class="report-view" hidden>
-          <nav class="profile-crumbs report-crumbs">
-            <button type="button" class="crumb-back" id="reportBackBtn">&#8592; Back to my sessions</button>
-            <span id="reportCrumb" class="crumb-here"></span>
-            <button type="button" class="secondary report-print-btn" id="reportPrintBtn">Print</button>
-          </nav>
-          <div id="sessionReportBody"></div>
-        </section>
-      </section>
-
-      <section class="panel dashboard-panel" id="intakePanelSection" hidden>
-        <h2>Intakes, groups and trainees</h2>
-        <p class="hint" id="rosterHint">Pick an intake, then a group, to see and edit its trainees. Trainees sign in with the EnergyTech ID listed here.</p>
-
-        <div class="roster-toolbar">
-          <label class="roster-search">
-            <span class="visually-hidden">Search every trainee</span>
-            <input id="rosterSearch" type="search" placeholder="Search all trainees by name or EnergyTech ID" autocomplete="off" />
-          </label>
-          <button id="loadRosterBtn" class="secondary" type="button">Refresh</button>
-        </div>
-        <div id="rosterStatusLine" class="feedback empty" hidden></div>
-        <!-- The temporary password from a trainee reset, shown once. -->
-        <div id="traineeResetResult" class="reset-result" hidden></div>
-
-        <!-- One trainee's record. Replaces the three panes so it has the full
-             width for a question-by-question review. -->
-        <section id="traineeProfileView" class="profile-view" hidden>
-          <nav class="profile-crumbs">
-            <button type="button" class="crumb-back" id="profileBackBtn">&#8592; Back to the roster</button>
-            <span id="profileCrumb" class="crumb-here"></span>
-          </nav>
-          <div id="profileBody"></div>
-        </section>
-
-        <div class="roster-workspace" id="rosterWorkspace">
-
-          <section class="roster-pane" id="paneIntakes" aria-label="Intakes">
-            <header class="pane-head">
-              <h3>Intakes</h3>
-              <button type="button" class="pane-add" id="showAddIntake" title="Add an intake">+ New</button>
-            </header>
-            <form class="pane-form" id="addIntakeForm" hidden>
-              <input id="newIntakeLabel" placeholder="e.g. JAN26" maxlength="30" autocomplete="off" />
-              <div class="pane-form-actions">
-                <button type="submit" id="addIntakeBtn">Add</button>
-                <button type="button" class="secondary" id="cancelAddIntake">Cancel</button>
-              </div>
-            </form>
-            <div class="pane-body" id="intakeList"></div>
-          </section>
-
-          <section class="roster-pane" id="paneGroups" aria-label="Groups">
-            <header class="pane-head">
-              <h3 id="groupPaneTitle">Groups</h3>
-              <button type="button" class="pane-add" id="showAddGroup" title="Add a group" hidden>+ New</button>
-            </header>
-            <form class="pane-form" id="addGroupForm" hidden>
-              <input id="newGroupName" placeholder="G1" maxlength="3" autocomplete="off" />
-              <div class="pane-form-actions">
-                <button type="submit" id="addGroupBtn">Add</button>
-                <button type="button" class="secondary" id="cancelAddGroup">Cancel</button>
-              </div>
-            </form>
-            <div class="pane-body" id="groupList"></div>
-          </section>
-
-          <section class="roster-pane roster-pane-wide" id="paneTrainees" aria-label="Trainees">
-            <header class="pane-head">
-              <h3 id="traineePaneTitle">Trainees</h3>
-              <div class="pane-head-actions" id="traineePaneActions" hidden>
-                <button type="button" class="pane-add" id="showAddTrainee">+ Add</button>
-                <button type="button" class="secondary" id="importCsvBtn">Import CSV</button>
-                <button type="button" class="secondary" id="downloadRosterCsvBtn" title="Download this group">&#8595; CSV</button>
-              </div>
-            </header>
-
-            <div class="filter-row" id="traineeFilters" hidden>
-              <button type="button" class="filter-chip is-on" data-filter="all">All</button>
-              <button type="button" class="filter-chip" data-filter="none">No login yet</button>
-              <button type="button" class="filter-chip" data-filter="active">Has a login</button>
-              <button type="button" class="filter-chip" data-filter="revoked">Revoked</button>
-            </div>
-
-            <form class="pane-form pane-form-wide" id="addTraineeForm" hidden>
-              <div class="grid trainee-fields">
-                <label>EnergyTech ID <input id="newTraineeId" placeholder="ET12345" autocomplete="off" /></label>
-                <label class="name-field">Full name <input id="newTraineeName" placeholder="Mohammed Abdullah Saleh Al-Otaibi" autocomplete="off" /></label>
-              </div>
-              <div class="pane-form-actions">
-                <button type="submit" id="addTraineeBtn">Add trainee</button>
-                <button type="button" class="secondary" id="cancelAddTrainee">Cancel</button>
-              </div>
-            </form>
-
-            <div class="bulk-bar" id="bulkBar" hidden>
-              <span id="bulkCount">0 selected</span>
-              <span class="bulk-actions">
-                <select id="bulkMoveTarget" aria-label="Move selected trainees to"></select>
-                <button type="button" id="bulkMoveBtn">Move</button>
-                <button type="button" class="secondary" id="bulkRevokeBtn">Revoke login</button>
-                <button type="button" class="secondary" id="bulkClearBtn">Clear</button>
-              </span>
-            </div>
-
-            <input id="csvFileInput" type="file" accept=".csv,text/csv" hidden />
-            <div id="csvPreview" class="csv-preview" hidden></div>
-            <div id="traineeManagerStatus" class="feedback empty" hidden></div>
-            <div class="pane-body" id="traineeList"></div>
-          </section>
-
-        </div>
-      </section>
-
-      <section class="panel dashboard-panel" id="adminPanelSection" hidden>
-        <h2>Instructor accounts (admin)</h2>
-        <p class="hint">Approve colleague sign-up requests and manage access. Only visible to admin accounts.</p>
-        <div class="button-row">
-          <button id="loadInstructorAccountsBtn" class="secondary">Load instructor accounts</button>
-        </div>
-        <!-- A reset hands back one temporary password, once. It is shown here
-             and nowhere else, and there is no way to ask for it again. -->
-        <div id="resetResult" class="reset-result" hidden></div>
-        <div id="instructorAccountsOutput" class="dashboard-output"></div>
-      </section>
-
-      <section class="panel" id="passwordPanel">
-        <h2>Change my password</h2>
-        <div class="grid student-grid">
-          <label>
-            Current password
-            <input id="changeOldPassword" type="password" autocomplete="current-password" placeholder="Current password" />
-          </label>
-          <label>
-            New password
-            <input id="changeNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
-          </label>
-        </div>
-        <div class="button-row">
-          <button id="changePasswordBtn" class="secondary">Change password</button>
-        </div>
-      </section>
-
-      <section class="panel dashboard-panel" id="connectionPanel">
-        <h2>Instructor connection setup</h2>
-        <p class="hint">Paste the Google Apps Script Web App URL. It is needed to save sessions, receive trainee results, and load the dashboard.</p>
-        <div class="grid dashboard-grid">
-          <label>
-            Google Apps Script Web App URL
-            <input id="webAppUrl" placeholder="https://script.google.com/macros/s/..." />
-          </label>
-        </div>
-        <div class="button-row">
-          <button id="saveWebAppUrlBtn" class="secondary">Save URL</button>
-        </div>
-        <div id="onlineStatus" class="feedback empty">Online collection is optional, but recommended for class use.</div>
-      </section>
-    </section>
-
-    <section id="studentInterface" hidden>
-      <!-- Trainee login. A trainee signs in with the EnergyTech ID that is on
-           their intake list; walk-ins are handled per session further down. -->
-      <section class="panel student-panel" id="traineeLoginPanel">
-        <h2>Trainee login</h2>
-        <div class="grid student-grid">
-          <label>
-            EnergyTech ID
-            <input id="traineeLoginId" autocomplete="username" placeholder="Your EnergyTech ID" />
-          </label>
-          <label>
-            Password
-            <input id="traineeLoginPassword" type="password" autocomplete="current-password" placeholder="Your password" />
-          </label>
-        </div>
-        <div class="button-row">
-          <button id="traineeLoginBtn">Log in</button>
-          <button id="toggleTraineeSignupBtn" class="secondary" type="button">First time? Create my account</button>
-          <button id="backFromTraineeBtn" class="secondary">Back</button>
-        </div>
-        <div id="traineeLoginStatus" class="feedback empty">Log in with your EnergyTech ID to start a quiz.</div>
-
-        <!-- Shown instead of the home screen when an admin has reset this
-             account. The temporary password gets them this far and no further. -->
-        <div id="traineeMustChangePanel" class="signup-panel must-change-panel" hidden>
-          <h3>Choose your own password</h3>
-          <p class="hint">Your password was reset by your instructor, so the one you were given is
-            temporary. Choose your own before starting a quiz — your instructor cannot see it.</p>
-          <div class="grid student-grid">
-            <label>
-              New password
-              <input id="traineeForcedNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
-            </label>
-            <label>
-              Repeat it
-              <input id="traineeForcedConfirm" type="password" autocomplete="new-password" placeholder="The same again" />
-            </label>
-          </div>
-          <div class="button-row">
-            <button id="traineeForcedChangeBtn" type="button">Save my new password</button>
-          </div>
-          <div id="traineeForcedStatus" class="feedback empty" hidden></div>
-        </div>
-
-        <div id="traineeSignupPanel" class="signup-panel" hidden>
-          <h3>Create my account</h3>
-          <p class="hint">Your EnergyTech ID must already be on your intake list. Choose a password you will remember — your instructor cannot see it.</p>
-          <div class="grid student-grid">
-            <label>
-              EnergyTech ID
-              <input id="traineeSignupId" autocomplete="username" placeholder="Your EnergyTech ID" />
-            </label>
-            <label>
-              Choose a password
-              <input id="traineeSignupPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" />
-            </label>
-            <label>
-              Confirm password
-              <input id="traineeSignupConfirm" type="password" autocomplete="new-password" placeholder="Repeat password" />
-            </label>
-          </div>
-          <div class="button-row">
-            <button id="traineeSignupBtn" type="button">Create account</button>
-          </div>
-          <div id="traineeSignupStatus" class="feedback empty">Enter your EnergyTech ID and choose a password.</div>
-        </div>
-
-        <div id="walkInPanel" class="signup-panel" hidden>
-          <h3>Sitting a quiz without an account</h3>
-          <p class="hint">Only for sessions where your instructor has allowed it. Your result is recorded as unregistered.</p>
-          <div class="grid student-grid">
-            <label>Session code <input id="walkInCode" placeholder="e.g. G1-4826" /></label>
-            <label>Name <input id="walkInName" autocomplete="name" /></label>
-            <label>Group <input id="walkInGroup" /></label>
-            <label>EnergyTech ID <input id="walkInId" /></label>
-          </div>
-          <div class="button-row">
-            <button id="walkInStartBtn" type="button">Check session and start</button>
-          </div>
-          <div id="walkInStatus" class="feedback empty">Enter the session code your instructor gave you.</div>
-        </div>
-        <div class="button-row">
-          <button id="toggleWalkInBtn" class="secondary" type="button">No account? Sitting as a guest</button>
-        </div>
-      </section>
-
-      <!-- Signed-in trainee: profile, then the session code. -->
-      <section class="panel student-panel" id="traineeHomePanel" hidden>
-        <div class="account-bar">
-          <div id="traineeAccountBar">Logged in.</div>
-          <button id="traineeLogoutBtn" class="secondary" type="button">Log out</button>
-        </div>
-        <div id="traineeProfile" class="trainee-profile"></div>
-        <div class="grid student-grid">
-          <label>Session code <input id="studentSessionCode" placeholder="e.g. G1-4826" /></label>
-        </div>
-        <div class="button-row">
-          <button id="loadTraineeSessionBtn">Load session and start quiz</button>
-          <button id="traineeChangePasswordToggle" class="secondary" type="button">Change my password</button>
-          <button id="backFromTraineeHomeBtn" class="secondary">Back</button>
-        </div>
-        <div id="studentStatus" class="feedback empty">Enter the session code from your instructor.</div>
-
-        <div id="traineePasswordPanel" class="signup-panel" hidden>
-          <h3>Change my password</h3>
-          <div class="grid student-grid">
-            <label>Current password <input id="traineeOldPassword" type="password" autocomplete="current-password" /></label>
-            <label>New password <input id="traineeNewPassword" type="password" autocomplete="new-password" placeholder="At least 6 characters" /></label>
-          </div>
-          <div class="button-row">
-            <button id="traineeChangePasswordBtn" type="button">Change password</button>
-          </div>
-          <div id="traineePasswordStatus" class="feedback empty"></div>
-        </div>
-
-        <!-- The trainee's own record, kept below the session code so it never
-             sits between them and starting a quiz. -->
-        <section id="myHistoryPanel" class="my-history" hidden>
-          <div class="my-history-head">
-            <h3>My results</h3>
-            <button id="myHistoryRefreshBtn" class="secondary" type="button">Refresh</button>
-          </div>
-          <div id="myHistoryBody"></div>
-        </section>
-      </section>
-
-      <section id="studentQuizArea" hidden>
-        <section id="studentQuizSummary" class="quiz-summary" aria-live="polite"></section>
-        <section id="studentQuizContainer" class="quiz-container"></section>
-
-        <section class="panel result-panel" id="studentResultPanel">
-          <h2>Submit answers</h2>
-          <div class="button-row">
-            <button id="studentSubmitBtn">Submit answers</button>
-            <button id="studentClearBtn" class="secondary">Clear answers</button>
-            <button id="studentDownloadResultBtn" class="secondary">Download result</button>
-          </div>
-          <div id="studentFeedback" class="feedback empty">Answer all questions. The submit button will not accept incomplete work.</div>
-        </section>
-      </section>
-    </section>
-
+    <img src="icon-192.png" alt="" width="96" height="96" />
+    <h1>This app has moved</h1>
+    <p>EnergyTech Mathematics Quiz App is now at a new address. Bookmarks and the app icon on
+      this device will keep working, but they will send you here first — please switch to the
+      new address below.</p>
+    <p><a class="button" id="newAddressLink" href="https://energytech-api-production.up.railway.app/">Go to the new app</a></p>
+    <p class="fineprint">You will be sent there automatically in a few seconds. If not, the address is
+      <strong>energytech-api-production.up.railway.app</strong> — worth writing down if you are about
+      to tell someone else where to go.</p>
   </main>
-
-  <footer>
-    <p>EnergyTech Mathematics Quiz App — Prepared by Mr. Adnane Khalifa, Mathematics Instructor.</p>
-  </footer>
-
-  <script src="question_bank.js"></script>
-  <script src="question_bank_ch03.js"></script>
-  <script src="question_bank_ch12a.js"></script>
-  <script src="question_bank_ch04.js"></script>
-  <script src="explanation_links.js"></script>
-  <script src="worksheet_tex.js"></script>
-  <script src="app.js"></script>
+  <script>
+    // The meta refresh above is the fallback; this is the primary path, and
+    // does not fire for a crawler or a very old browser with JS off, which is
+    // exactly when the meta refresh should carry it instead.
+    setTimeout(function () {
+      window.location.replace(document.getElementById('newAddressLink').href);
+    }, 5000);
+  </script>
 </body>
 </html>
